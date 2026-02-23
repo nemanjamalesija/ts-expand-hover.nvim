@@ -4,6 +4,7 @@
 local M = {}
 
 local config = require("ts_expand_hover.config")
+local lsp    = require("ts_expand_hover.lsp")
 
 -- Centralized session state. Sub-modules receive a reference to this table.
 local state = {
@@ -32,9 +33,35 @@ function M.setup(opts)
 end
 
 --- Trigger expandable hover at the current cursor position.
---- Wired to the vtsls request pipeline in Task 2.
+--- Sends a quickinfo request to vtsls; falls back to vim.lsp.buf.hover() when
+--- vtsls is not attached or returns an error (COMP-01, COMP-02).
 function M.hover()
-  vim.notify("ts-expand-hover: hover() not yet wired", vim.log.levels.DEBUG)
+  local bufnr = vim.api.nvim_get_current_buf()
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  -- nvim_win_get_cursor returns { row, col } where row is 1-indexed.
+  -- Convert to 0-indexed row; lsp.lua adds 1 back for tsserver.
+  local row = cursor[1] - 1
+  local col = cursor[2] -- already 0-indexed; lsp.lua adds 1 for tsserver
+
+  lsp.request({
+    bufnr     = bufnr,
+    row       = row,
+    col       = col,
+    verbosity = state.verbosity,
+    state     = state,
+    callback  = function(body)
+      -- Phase 1: output to vim.notify for pipeline validation.
+      -- Phase 2+ will route to float.show() instead.
+      vim.schedule(function()
+        local msg = string.format(
+          "displayString: %s\ncanIncrease: %s",
+          body.displayString or "nil",
+          tostring(body.canIncreaseVerbosityLevel)
+        )
+        vim.notify(msg, vim.log.levels.INFO)
+      end)
+    end,
+  })
 end
 
 return M
