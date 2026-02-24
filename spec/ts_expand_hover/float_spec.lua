@@ -220,6 +220,36 @@ describe("float", function()
       assert.is_truthy(footer_text:find("%[%-%] collapse"))
     end)
 
+    it("widens float so full footer fits when max_width allows it", function()
+      local float = fresh_float()
+      local state = new_state({ verbosity = 2 })
+      local short_body = { displayString = "x", canIncreaseVerbosityLevel = true }
+
+      float.show(short_body, state)
+
+      local call_args = stubs.nvim_open_win.calls[1]
+      local win_cfg = call_args.vals[3]
+      local footer_text = win_cfg.footer[1][1]
+      assert.is_truthy(footer_text:find("depth: 2"))
+      assert.is_true(win_cfg.width >= #footer_text)
+    end)
+
+    it("falls back to compact footer variant when max_width is narrow", function()
+      config.setup({ float = { max_width = 20 } })
+      local float = fresh_float()
+      local state = new_state({ verbosity = 1 })
+
+      float.show(SUCCESS_BODY, state)
+
+      local call_args = stubs.nvim_open_win.calls[1]
+      local win_cfg = call_args.vals[3]
+      local footer_text = win_cfg.footer[1][1]
+      assert.is_truthy(footer_text:find("d:1", 1, true))
+      assert.is_falsy(footer_text:find("expand", 1, true))
+      assert.is_falsy(footer_text:find("collapse", 1, true))
+      assert.is_true(#footer_text <= win_cfg.width)
+    end)
+
     it("registers q and Esc keymaps on float buffer (HOVR-04)", function()
       local float = fresh_float()
       local state = new_state()

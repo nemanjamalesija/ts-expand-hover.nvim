@@ -60,35 +60,66 @@ local function _build_lines(body)
   return result
 end
 
---- Build the footer hint string showing current verbosity and available keys.
---- Footer text reflects boundary state: [+] expand vs [max], [-] vs [-] collapse.
+--- Return display width for text.
+---@param text string
+---@return integer
+local function _display_width(text)
+  return vim.fn.strdisplaywidth(text)
+end
+
+--- Truncate text so display width is <= max_width.
+---@param text string
+---@param max_width integer
+---@return string
+local function _truncate_to_width(text, max_width)
+  if max_width <= 0 then return "" end
+  if _display_width(text) <= max_width then return text end
+  local chars = vim.fn.strchars(text)
+  while chars > 0 do
+    local candidate = vim.fn.strcharpart(text, 0, chars)
+    if _display_width(candidate) <= max_width then
+      return candidate
+    end
+    chars = chars - 1
+  end
+  return ""
+end
+
+--- Build footer variants ordered from most to least descriptive.
 ---@param state table Session state with verbosity field
 ---@param body table|nil LSP response body with canIncreaseVerbosityLevel field
----@return string
-local function _build_footer(state, body)
+---@return string[]
+local function _build_footer_variants(state, body)
   local can_expand = body and body.canIncreaseVerbosityLevel
   local at_min     = state.verbosity == 0
 
-  local expand_hint
+  local expand_full
   if can_expand then
-    expand_hint = "[+] expand"
+    expand_full = "[+] expand"
   else
-    expand_hint = "[max]"
+    expand_full = "[max]"
   end
 
-  local collapse_hint
+  local collapse_full
   if at_min then
-    collapse_hint = "[-]"
+    collapse_full = "[-]"
   else
-    collapse_hint = "[-] collapse"
+    collapse_full = "[-] collapse"
   end
 
-  return string.format(
+  local full = string.format(
     "depth: %d  %s  %s  [q] close",
     state.verbosity,
-    expand_hint,
-    collapse_hint
+    expand_full,
+    collapse_full
   )
+  local medium = string.format(
+    "d:%d  %s  [-]  [q]",
+    state.verbosity,
+    can_expand and "[+]" or "[max]"
+  )
+  local minimal = string.format("d:%d", state.verbosity)
+  return { full, medium, minimal }
 end
 
 --- Apply treesitter markdown highlighting to the given buffer.
@@ -112,15 +143,52 @@ local function _max_line_width(lines)
   return max
 end
 
+--- Compute window width/height and the best footer variant for available width.
+--- Prefers the most descriptive footer that fits while respecting max_width.
+---@param lines string[]
+---@param state table
+---@param body table|nil
+---@param cfg table
+---@return integer width
+---@return integer height
+---@return string footer_text
+local function _compute_layout(lines, state, body, cfg)
+  local content_width = _max_line_width(lines)
+  local max_width = math.max(1, cfg.max_width)
+  local variants = _build_footer_variants(state, body)
+
+  -- Default to minimal footer when only max-width constrained content fits.
+  local chosen_footer = variants[#variants]
+  local width = math.min(max_width, math.max(content_width, _display_width(chosen_footer)))
+
+  for _, footer in ipairs(variants) do
+    local needed_width = math.max(content_width, _display_width(footer))
+    if needed_width <= max_width then
+      chosen_footer = footer
+      width = needed_width
+      break
+    end
+  end
+
+  if _display_width(chosen_footer) > width then
+    chosen_footer = _truncate_to_width(chosen_footer, width)
+  end
+
+  local height = math.min(cfg.max_height, #lines)
+  return width, height, chosen_footer
+end
+
 --- Open a new focused floating window with the given content.
 ---@param lines string[]
 ---@param footer_text string
+---@param width integer
+---@param height integer
 ---@param state table
 ---@param cfg table float config (border, max_width, max_height)
 ---@param on_expand function|nil callback for + keymap
 ---@param on_collapse function|nil callback for - keymap
 ---@return integer win, integer buf
-local function _open(lines, footer_text, state, cfg, on_expand, on_collapse)
+local function _open(lines, footer_text, width, height, state, cfg, on_expand, on_collapse)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype   = "nofile"
   vim.bo[buf].bufhidden = "wipe"
@@ -130,9 +198,6 @@ local function _open(lines, footer_text, state, cfg, on_expand, on_collapse)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   _apply_treesitter(buf)
-
-  local width  = math.min(cfg.max_width,  _max_line_width(lines))
-  local height = math.min(cfg.max_height, #lines)
 
   local win = vim.api.nvim_open_win(buf, true, {
     relative   = "cursor",
@@ -159,9 +224,10 @@ end
 --- Uses the read-then-write pattern to avoid dropping footer_pos (NeoVim #31992).
 ---@param lines string[]
 ---@param footer_text string
+---@param width integer
+---@param height integer
 ---@param state table
----@param cfg table
-local function _update(lines, footer_text, state, cfg)
+local function _update(lines, footer_text, width, height, state)
   local buf = state.float_bufnr
   local win = state.float_winid
 
@@ -172,9 +238,6 @@ local function _update(lines, footer_text, state, cfg)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   _apply_treesitter(buf)
-
-  local width  = math.min(cfg.max_width,  _max_line_width(lines))
-  local height = math.min(cfg.max_height, #lines)
 
   -- Read existing config first so relative, footer_pos, etc. are preserved.
   local existing = vim.api.nvim_win_get_config(win)
@@ -266,14 +329,14 @@ function M.show(body, state, on_expand, on_collapse)
   -- needing a reference to the full body table.
   state.can_expand = body and body.canIncreaseVerbosityLevel or false
 
-  local footer = _build_footer(state, body)
+  local width, height, footer = _compute_layout(lines, state, body, cfg)
 
   if state.float_winid and vim.api.nvim_win_is_valid(state.float_winid) then
-    _update(lines, footer, state, cfg)
+    _update(lines, footer, width, height, state)
   else
     -- Capture source window before focus moves into the float.
     state.source_winid = vim.api.nvim_get_current_win()
-    local win, buf = _open(lines, footer, state, cfg, on_expand, on_collapse)
+    local win, buf = _open(lines, footer, width, height, state, cfg, on_expand, on_collapse)
     _setup_close_autocmds(win, state.source_bufnr, state)
     _setup_keymaps(buf, state, on_expand, on_collapse)
   end
