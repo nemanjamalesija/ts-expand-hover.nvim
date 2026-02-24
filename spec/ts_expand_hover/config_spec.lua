@@ -1,0 +1,64 @@
+local config = require("ts_expand_hover.config")
+
+describe("config", function()
+  before_each(function()
+    config.setup(nil)
+  end)
+
+  it("returns defaults when setup called with nil (COMP-04)", function()
+    config.setup(nil)
+    local c = config.get()
+    assert.equals("rounded", c.float.border)
+    assert.equals(80, c.float.max_width)
+    assert.equals(30, c.float.max_height)
+    assert.equals("K", c.keymaps.hover)
+    assert.equals("+", c.keymaps.expand)
+    assert.equals("-", c.keymaps.collapse)
+    assert.is_table(c.keymaps.close)
+    assert.equals("q", c.keymaps.close[1])
+    assert.equals("<Esc>", c.keymaps.close[2])
+  end)
+
+  it("returns defaults when setup called with empty table (COMP-04)", function()
+    config.setup({})
+    local c = config.get()
+    assert.equals("rounded", c.float.border)
+    assert.equals(80, c.float.max_width)
+    assert.equals(30, c.float.max_height)
+    assert.equals("K", c.keymaps.hover)
+    assert.equals("+", c.keymaps.expand)
+    assert.equals("-", c.keymaps.collapse)
+    assert.is_table(c.keymaps.close)
+    assert.equals("q", c.keymaps.close[1])
+    assert.equals("<Esc>", c.keymaps.close[2])
+  end)
+
+  it("merges user float options with defaults (COMP-04)", function()
+    config.setup({ float = { border = "single", max_width = 40 } })
+    local c = config.get()
+    assert.equals("single", c.float.border)
+    assert.equals(40, c.float.max_width)
+    assert.equals(30, c.float.max_height) -- default preserved
+  end)
+
+  it("merges user keymap options with defaults (COMP-04)", function()
+    config.setup({ keymaps = { hover = "<leader>k" } })
+    local c = config.get()
+    assert.equals("<leader>k", c.keymaps.hover)
+    assert.equals("+", c.keymaps.expand)   -- default preserved
+    assert.equals("-", c.keymaps.collapse) -- default preserved
+  end)
+
+  it("preserves nested default values not overridden by user (COMP-04)", function()
+    config.setup({ float = { border = "none" } })
+    local c = config.get()
+    assert.equals("none", c.float.border)
+    assert.equals(80, c.float.max_width)   -- preserved
+    assert.equals(30, c.float.max_height)  -- preserved
+    -- keymaps entirely untouched
+    assert.equals("K", c.keymaps.hover)
+    assert.equals("+", c.keymaps.expand)
+    assert.equals("-", c.keymaps.collapse)
+    assert.is_table(c.keymaps.close)
+  end)
+end)
