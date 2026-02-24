@@ -171,21 +171,29 @@ local function _setup_close_autocmds(winid, source_bufnr, state)
 end
 
 --- Bind buffer-local keymaps to close, expand, and collapse the float.
+--- Keys are read from config; any key set to false is skipped entirely.
 --- on_expand and on_collapse are closures provided by init.lua; nil = not registered.
 ---@param bufnr integer float buffer number
 ---@param state table
----@param on_expand function|nil callback for + keymap
----@param on_collapse function|nil callback for - keymap
+---@param on_expand function|nil callback for expand keymap
+---@param on_collapse function|nil callback for collapse keymap
 local function _setup_keymaps(bufnr, state, on_expand, on_collapse)
+  local km    = require("ts_expand_hover.config").get().keymaps
   local close = function() M.close(state) end
-  vim.keymap.set("n", "q",     close, { buffer = bufnr, nowait = true, silent = true })
-  vim.keymap.set("n", "<Esc>", close, { buffer = bufnr, nowait = true, silent = true })
 
-  if on_expand then
-    vim.keymap.set("n", "+", function() on_expand() end, { buffer = bufnr, nowait = true, silent = true })
+  if km.close ~= false then
+    local close_keys = type(km.close) == "table" and km.close or { km.close }
+    for _, key in ipairs(close_keys) do
+      vim.keymap.set("n", key, close, { buffer = bufnr, nowait = true, silent = true })
+    end
   end
-  if on_collapse then
-    vim.keymap.set("n", "-", function() on_collapse() end, { buffer = bufnr, nowait = true, silent = true })
+
+  if on_expand and km.expand ~= false then
+    vim.keymap.set("n", km.expand, function() on_expand() end, { buffer = bufnr, nowait = true, silent = true })
+  end
+
+  if on_collapse and km.collapse ~= false then
+    vim.keymap.set("n", km.collapse, function() on_collapse() end, { buffer = bufnr, nowait = true, silent = true })
   end
 end
 
