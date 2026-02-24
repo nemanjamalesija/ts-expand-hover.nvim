@@ -115,6 +115,9 @@ function M.hover()
   -- Capture position for expand/collapse re-requests targeting the same symbol.
   state.source_pos = { row, col }
 
+  state.generation = state.generation + 1
+  local gen = state.generation
+
   lsp.request({
     bufnr     = bufnr,
     row       = row,
@@ -123,6 +126,8 @@ function M.hover()
     state     = state,
     callback  = function(body)
       vim.schedule(function()
+        -- Stale response guard: discard if a newer hover session has started.
+        if state.generation ~= gen then return end
         float.show(body, state, function() _do_expand() end, function() _do_collapse() end)
       end)
     end,
