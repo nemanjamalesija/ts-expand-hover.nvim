@@ -55,6 +55,7 @@ describe("float", function()
     stubs.nvim_create_augroup   = stub(vim.api, "nvim_create_augroup").returns(1)
     stubs.nvim_create_autocmd   = stub(vim.api, "nvim_create_autocmd").returns(1)
     stubs.nvim_del_augroup_by_name = stub(vim.api, "nvim_del_augroup_by_name")
+    stubs.nvim_win_set_cursor      = stub(vim.api, "nvim_win_set_cursor")
 
     -- NeoVim 0.10+ uses nvim_set_option_value for vim.bo/vim.wo.
     -- Stub it so property assignments don't hit real API with fake buffer IDs.
@@ -154,8 +155,10 @@ describe("float", function()
       -- footer is { { text, hl_group } }
       local footer_text = win_cfg.footer[1][1]
       assert.is_truthy(footer_text:find("depth: 0"))
+      -- At verbosity 0 with canIncreaseVerbosityLevel=true: expand shows [+] expand,
+      -- collapse shows [-] (non-functional at_min state per EXPN-06).
       assert.is_truthy(footer_text:find("%[%+%] expand"))
-      assert.is_truthy(footer_text:find("%[%-%] collapse"))
+      assert.is_truthy(footer_text:find("%[%-%]"))
       assert.is_truthy(footer_text:find("%[q%] close"))
     end)
 
