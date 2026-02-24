@@ -3,24 +3,58 @@
 
 local M = {}
 
---- Split body.displayString into content lines.
+--- Split body.displayString into content lines wrapped in a typescript fenced code block.
 ---@param body table LSP response body with displayString field
 ---@return string[]
 local function _build_lines(body)
   if not body or not body.displayString then
     return { "(no type info)" }
   end
-  return vim.split(body.displayString, "\n", { plain = true })
+  local content_lines = vim.split(body.displayString, "\n", { plain = true })
+  local result = { "```typescript" }
+  for _, line in ipairs(content_lines) do
+    result[#result + 1] = line
+  end
+  result[#result + 1] = "```"
+  return result
 end
 
 --- Build the footer hint string showing current verbosity and available keys.
+--- Footer text reflects boundary state: [+] expand vs [max], [-] vs [-] collapse.
 ---@param state table Session state with verbosity field
+---@param body table|nil LSP response body with canIncreaseVerbosityLevel field
 ---@return string
-local function _build_footer(state)
+local function _build_footer(state, body)
+  local can_expand = body and body.canIncreaseVerbosityLevel
+  local at_min     = state.verbosity == 0
+
+  local expand_hint
+  if can_expand then
+    expand_hint = "[+] expand"
+  else
+    expand_hint = "[max]"
+  end
+
+  local collapse_hint
+  if at_min then
+    collapse_hint = "[-]"
+  else
+    collapse_hint = "[-] collapse"
+  end
+
   return string.format(
-    "depth: %d  [+] expand  [-] collapse  [q] close",
-    state.verbosity or 0
+    "depth: %d  %s  %s  [q] close",
+    state.verbosity,
+    expand_hint,
+    collapse_hint
   )
+end
+
+--- Apply treesitter markdown highlighting to the given buffer.
+--- Called after every content write. pcall guards against missing markdown parser.
+---@param bufnr integer
+local function _apply_treesitter(bufnr)
+  pcall(vim.treesitter.start, bufnr, "markdown")
 end
 
 --- Return the maximum display width of a list of lines.
@@ -42,8 +76,10 @@ end
 ---@param footer_text string
 ---@param state table
 ---@param cfg table float config (border, max_width, max_height)
+---@param on_expand function|nil callback for + keymap
+---@param on_collapse function|nil callback for - keymap
 ---@return integer win, integer buf
-local function _open(lines, footer_text, state, cfg)
+local function _open(lines, footer_text, state, cfg, on_expand, on_collapse)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype   = "nofile"
   vim.bo[buf].bufhidden = "wipe"
@@ -52,6 +88,7 @@ local function _open(lines, footer_text, state, cfg)
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
+  _apply_treesitter(buf)
 
   local width  = math.min(cfg.max_width,  _max_line_width(lines))
   local height = math.min(cfg.max_height, #lines)
@@ -93,6 +130,7 @@ local function _update(lines, footer_text, state, cfg)
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
+  _apply_treesitter(buf)
 
   local width  = math.min(cfg.max_width,  _max_line_width(lines))
   local height = math.min(cfg.max_height, #lines)
@@ -103,6 +141,9 @@ local function _update(lines, footer_text, state, cfg)
   existing.height = height
   existing.footer = { { footer_text, "FloatFooter" } }
   vim.api.nvim_win_set_config(win, existing)
+
+  -- Reset scroll to top after content change.
+  vim.api.nvim_win_set_cursor(win, { 1, 0 })
 end
 
 --- Register CursorMoved and BufLeave autocmds on the source buffer.
@@ -129,32 +170,49 @@ local function _setup_close_autocmds(winid, source_bufnr, state)
   })
 end
 
---- Bind buffer-local q and Esc keys to close the float.
+--- Bind buffer-local keymaps to close, expand, and collapse the float.
+--- on_expand and on_collapse are closures provided by init.lua; nil = not registered.
 ---@param bufnr integer float buffer number
 ---@param state table
-local function _setup_keymaps(bufnr, state)
+---@param on_expand function|nil callback for + keymap
+---@param on_collapse function|nil callback for - keymap
+local function _setup_keymaps(bufnr, state, on_expand, on_collapse)
   local close = function() M.close(state) end
   vim.keymap.set("n", "q",     close, { buffer = bufnr, nowait = true, silent = true })
   vim.keymap.set("n", "<Esc>", close, { buffer = bufnr, nowait = true, silent = true })
+
+  if on_expand then
+    vim.keymap.set("n", "+", function() on_expand() end, { buffer = bufnr, nowait = true, silent = true })
+  end
+  if on_collapse then
+    vim.keymap.set("n", "-", function() on_collapse() end, { buffer = bufnr, nowait = true, silent = true })
+  end
 end
 
 --- Open a focused float or update the existing one in-place.
 --- Entry point called from init.lua on every LSP response.
 ---@param body table LSP response body { displayString, canIncreaseVerbosityLevel, ... }
 ---@param state table Session state
-function M.show(body, state)
+---@param on_expand function|nil callback fired when user presses + inside the float
+---@param on_collapse function|nil callback fired when user presses - inside the float
+function M.show(body, state, on_expand, on_collapse)
   local cfg    = require("ts_expand_hover.config").get().float
   local lines  = _build_lines(body)
-  local footer = _build_footer(state)
+
+  -- Store can_expand in state so expand/collapse handlers can read it without
+  -- needing a reference to the full body table.
+  state.can_expand = body and body.canIncreaseVerbosityLevel or false
+
+  local footer = _build_footer(state, body)
 
   if state.float_winid and vim.api.nvim_win_is_valid(state.float_winid) then
     _update(lines, footer, state, cfg)
   else
     -- Capture source window before focus moves into the float.
     state.source_winid = vim.api.nvim_get_current_win()
-    local win, buf = _open(lines, footer, state, cfg)
+    local win, buf = _open(lines, footer, state, cfg, on_expand, on_collapse)
     _setup_close_autocmds(win, state.source_bufnr, state)
-    _setup_keymaps(buf, state)
+    _setup_keymaps(buf, state, on_expand, on_collapse)
   end
 end
 
