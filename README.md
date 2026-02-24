@@ -27,7 +27,10 @@ Expandable TypeScript type inspection for NeoVim. Uses TypeScript 5.9's `verbosi
 {
   "nemanjamalesija/ts-expand-hover.nvim",
   ft = { "typescript", "typescriptreact" },
-  opts = {},
+  opts = {
+    -- Recommended: avoid conflicts with distros/plugins that already map `K`
+    keymaps = { hover = "<leader>th" },
+  },
 }
 ```
 
@@ -103,6 +106,37 @@ require("ts_expand_hover").setup({
 })
 ```
 
+### Recommended binding strategy
+
+Many Neovim distributions and plugins already map `K` (often buffer-local for LSP hover),
+which can override global mappings. To avoid conflicts, use a custom binding:
+
+```lua
+require("ts_expand_hover").setup({
+  keymaps = {
+    hover = "<leader>th",
+  },
+})
+```
+
+If you want to keep `K`, prefer a TypeScript-only mapping:
+
+```lua
+require("ts_expand_hover").setup({
+  keymaps = { hover = false }, -- disable global mapping
+})
+
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = { "typescript", "typescriptreact" },
+  callback = function(ev)
+    vim.keymap.set("n", "K", require("ts_expand_hover").hover, {
+      buffer = ev.buf,
+      desc = "TypeScript expandable hover",
+    })
+  end,
+})
+```
+
 ### Disabling keymaps
 
 Set any keymap to `false` to prevent the plugin from registering it. This is useful if you want to bind the hover function yourself:
@@ -175,14 +209,16 @@ vtsls is not attached to the buffer. Check with `:checkhealth ts_expand_hover`. 
 
 **K is already bound to something else**
 
-Disable the default binding and use your own:
+Recommended: use a custom hover key to avoid mapping conflicts.
 
 ```lua
 require("ts_expand_hover").setup({
-  keymaps = { hover = false },
+  keymaps = { hover = "<leader>th" },
 })
-vim.keymap.set("n", "<your-key>", require("ts_expand_hover").hover)
 ```
+
+If you specifically want `K`, disable the global mapping and remap it only for
+TypeScript buffers (see "Recommended binding strategy" above).
 
 ## Running tests
 
