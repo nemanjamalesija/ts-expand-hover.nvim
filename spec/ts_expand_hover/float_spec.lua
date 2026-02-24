@@ -477,4 +477,139 @@ describe("float", function()
 
   end) -- edge cases
 
+  -- ============================================================ content rendering
+
+  describe("content rendering", function()
+
+    -- Helper: run show() and return the lines written to the buffer.
+    local function shown_lines(body)
+      local float = fresh_float()
+      local state = new_state()
+      float.show(body, state)
+      return stubs.nvim_buf_set_lines.calls[1].vals[5]
+    end
+
+    -- RNDR-01 ------------------------------------------------------------
+
+    it("renders fenced typescript code block (RNDR-01)", function()
+      local lines = shown_lines(SUCCESS_BODY)
+      assert.equals("```typescript",    lines[1])
+      assert.equals("type Foo = string", lines[2])
+      assert.equals("```",              lines[#lines])
+    end)
+
+    -- RNDR-02 ------------------------------------------------------------
+
+    it("renders documentation text below type block (RNDR-02)", function()
+      local body = {
+        displayString = "function greet(name: string): string",
+        documentation = "Greets the given name.",
+        tags          = {},
+      }
+      local lines = shown_lines(body)
+
+      -- Type block
+      assert.equals("```typescript", lines[1])
+      assert.equals("function greet(name: string): string", lines[2])
+      assert.equals("```",           lines[3])
+
+      -- Blank separator then documentation
+      assert.equals("",                     lines[4])
+      assert.equals("Greets the given name.", lines[5])
+    end)
+
+    it("handles multi-line documentation (RNDR-02)", function()
+      local body = {
+        displayString = "const x: number",
+        documentation = "Line one.\nLine two.",
+        tags          = {},
+      }
+      local lines = shown_lines(body)
+
+      -- Fence block is 3 lines; blank sep at [4]
+      assert.equals("Line one.", lines[5])
+      assert.equals("Line two.", lines[6])
+    end)
+
+    it("skips documentation section when documentation is empty (RNDR-02)", function()
+      local body = {
+        displayString = "const x: number",
+        documentation = "",
+        tags          = {},
+      }
+      local lines = shown_lines(body)
+
+      -- Single-line type → fence is exactly 3 lines; no extras when docs empty
+      assert.equals(3, #lines)
+      assert.equals("```typescript",  lines[1])
+      assert.equals("const x: number", lines[2])
+      assert.equals("```",             lines[3])
+    end)
+
+    -- RNDR-03 ------------------------------------------------------------
+
+    it("renders JSDoc tags below documentation (RNDR-03)", function()
+      local body = {
+        displayString = "function greet(name: string): string",
+        documentation = "Greets the given name.",
+        tags = {
+          { name = "param",   text = "name The name" },
+          { name = "returns", text = "A greeting" },
+        },
+      }
+      local lines = shown_lines(body)
+
+      -- Check tag lines exist somewhere in the output
+      local joined = table.concat(lines, "\n")
+      assert.is_truthy(joined:find("**@param** name The name",   1, true))
+      assert.is_truthy(joined:find("**@returns** A greeting",    1, true))
+    end)
+
+    it("renders tags without documentation (RNDR-03)", function()
+      local body = {
+        displayString = "function greet(name: string): string",
+        documentation = "",
+        tags = {
+          { name = "deprecated", text = "Use hi() instead" },
+        },
+      }
+      local lines = shown_lines(body)
+
+      -- Fence block (3 lines), blank sep, tag line
+      assert.equals("```typescript", lines[1])
+      assert.equals("```",           lines[3])
+      assert.equals("",              lines[4])
+      assert.equals("**@deprecated** Use hi() instead", lines[5])
+    end)
+
+    it("handles SymbolDisplayPart arrays in documentation and tags (RNDR-03)", function()
+      local body = {
+        displayString = "type X = string",
+        documentation = { { kind = "text", text = "A desc." } },
+        tags = {
+          { name = "deprecated", text = { { kind = "text", text = "Use Y." } } },
+        },
+      }
+      local lines = shown_lines(body)
+
+      local joined = table.concat(lines, "\n")
+      assert.is_truthy(joined:find("A desc.",             1, true))
+      assert.is_truthy(joined:find("**@deprecated** Use Y.", 1, true))
+    end)
+
+    it("skips tags section when tags is empty (RNDR-03)", function()
+      local body = {
+        displayString = "const x: number",
+        documentation = "Some docs.",
+        tags          = {},
+      }
+      local lines = shown_lines(body)
+
+      -- Fence (3) + blank (1) + doc (1) = 5 total; no trailing blank for tags
+      assert.equals(5, #lines)
+      assert.equals("Some docs.", lines[5])
+    end)
+
+  end) -- content rendering
+
 end)
