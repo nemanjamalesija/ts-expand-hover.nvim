@@ -219,22 +219,36 @@ end
 ---@param on_expand function|nil callback for expand keymap
 ---@param on_collapse function|nil callback for collapse keymap
 local function _setup_keymaps(bufnr, state, on_expand, on_collapse)
+  --- Normalize a key config into a list of concrete mappings.
+  --- Supports keypad aliases for default +/- so expand/collapse work with numpad.
+  ---@param key string|string[]
+  ---@return string[]
+  local function key_list(key)
+    if type(key) == "table" then return key end
+    if key == "+" then return { "+", "<kPlus>" } end
+    if key == "-" then return { "-", "<kMinus>" } end
+    return { key }
+  end
+
   local km    = require("ts_expand_hover.config").get().keymaps
   local close = function() M.close(state) end
 
   if km.close ~= false then
-    local close_keys = type(km.close) == "table" and km.close or { km.close }
-    for _, key in ipairs(close_keys) do
+    for _, key in ipairs(key_list(km.close)) do
       vim.keymap.set("n", key, close, { buffer = bufnr, nowait = true, silent = true })
     end
   end
 
   if on_expand and km.expand ~= false then
-    vim.keymap.set("n", km.expand, function() on_expand() end, { buffer = bufnr, nowait = true, silent = true })
+    for _, key in ipairs(key_list(km.expand)) do
+      vim.keymap.set("n", key, function() on_expand() end, { buffer = bufnr, nowait = true, silent = true })
+    end
   end
 
   if on_collapse and km.collapse ~= false then
-    vim.keymap.set("n", km.collapse, function() on_collapse() end, { buffer = bufnr, nowait = true, silent = true })
+    for _, key in ipairs(key_list(km.collapse)) do
+      vim.keymap.set("n", key, function() on_collapse() end, { buffer = bufnr, nowait = true, silent = true })
+    end
   end
 end
 
