@@ -3,7 +3,25 @@
 
 local M = {}
 
+--- Flatten a SymbolDisplayPart[] array or plain string to a single string.
+--- Returns the input unchanged when it is already a string.
+--- Returns nil for any other type (nil, boolean, number).
+---@param val string|table|nil SymbolDisplayPart[] or plain string
+---@return string|nil
+local function _flatten_display_parts(val)
+  if type(val) == "string" then return val end
+  if type(val) == "table" then
+    local texts = {}
+    for _, part in ipairs(val) do
+      if part.text then texts[#texts + 1] = part.text end
+    end
+    return table.concat(texts)
+  end
+  return nil
+end
+
 --- Split body.displayString into content lines wrapped in a typescript fenced code block.
+--- Appends documentation text (RNDR-02) and JSDoc tags (RNDR-03) when present.
 ---@param body table LSP response body with displayString field
 ---@return string[]
 local function _build_lines(body)
@@ -16,6 +34,29 @@ local function _build_lines(body)
     result[#result + 1] = line
   end
   result[#result + 1] = "```"
+
+  -- Documentation text (RNDR-02)
+  local doc = _flatten_display_parts(body.documentation)
+  if doc and doc ~= "" then
+    result[#result + 1] = ""
+    for _, line in ipairs(vim.split(doc, "\n", { plain = true })) do
+      result[#result + 1] = line
+    end
+  end
+
+  -- JSDoc tags (RNDR-03)
+  if body.tags and #body.tags > 0 then
+    result[#result + 1] = ""
+    for _, tag in ipairs(body.tags) do
+      local text = _flatten_display_parts(tag.text)
+      local tag_lines = vim.split(text or "", "\n", { plain = true })
+      result[#result + 1] = string.format("**@%s** %s", tag.name, tag_lines[1] or "")
+      for i = 2, #tag_lines do
+        result[#result + 1] = tag_lines[i]
+      end
+    end
+  end
+
   return result
 end
 
