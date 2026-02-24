@@ -1,0 +1,169 @@
+*ts_expand_hover.txt*   TypeScript expandable hover for NeoVim
+
+                                                *ts_expand_hover*
+ts-expand-hover.nvim~
+
+CONTENTS                                        *ts_expand_hover-contents*
+
+  1. Introduction ............... |ts_expand_hover-intro|
+  2. Requirements ............... |ts_expand_hover-requirements|
+  3. Setup ...................... |ts_expand_hover-setup|
+  4. Configuration .............. |ts_expand_hover-config|
+  5. Keymaps .................... |ts_expand_hover-keymaps|
+  6. Health check ............... |ts_expand_hover-health|
+
+==============================================================================
+INTRODUCTION                                    *ts_expand_hover-intro*
+
+ts-expand-hover.nvim brings TypeScript 5.9+ expandable type inspection to
+NeoVim. When you press `K` over a TypeScript symbol, the plugin opens a
+focused float showing the type signature. Inside the float you can press `+`
+to expand the type to the next verbosity level and `-` to collapse it back,
+replicating the type inspection experience available natively in VS Code with
+TypeScript 5.9+.
+
+The plugin sends incremental `typescript.tsserver.request` calls with
+increasing `verbosityLevel` values (0–3) to the vtsls language server, which
+forwards them to tsserver via an escape hatch. For this reason the plugin is
+vtsls-only in version 1. Support for ts_ls (the official NeoVim TypeScript
+server) is deferred to a future version.
+
+==============================================================================
+REQUIREMENTS                                    *ts_expand_hover-requirements*
+
+- NeoVim 0.10 or later
+- vtsls LSP server configured and attached to TypeScript buffers
+  (https://github.com/yioneko/vtsls)
+- TypeScript 5.9 or later (for `verbosityLevel` quickinfo support)
+
+==============================================================================
+SETUP                                           *ts_expand_hover-setup*
+
+Add the plugin with lazy.nvim and call `setup()` in the `config` callback: >lua
+  {
+    "username/ts-expand-hover.nvim",
+    ft = { "typescript", "typescriptreact" },
+    config = function()
+      require("ts_expand_hover").setup()
+    end,
+  }
+<
+
+`setup()` must be called — no keymaps are registered until it runs.
+
+Minimal call with all defaults: >lua
+  require("ts_expand_hover").setup()
+<
+
+==============================================================================
+CONFIGURATION                                   *ts_expand_hover-config*
+
+Full default configuration: >lua
+  require("ts_expand_hover").setup({
+    keymaps = {
+      hover    = "K",
+      expand   = "+",
+      collapse = "-",
+      close    = { "q", "<Esc>" },
+    },
+    float = {
+      border     = "rounded",
+      max_width  = 80,
+      max_height = 30,
+    },
+  })
+<
+
+Options ~
+
+`keymaps.hover` (string | false)
+  Normal-mode key to open the hover float. Mapped globally on `setup()`.
+  Default: `"K"`
+
+`keymaps.expand` (string | false)
+  Key to expand the type to the next verbosity level (buffer-local inside
+  the float). Default: `"+"`
+
+`keymaps.collapse` (string | false)
+  Key to collapse the type to the previous verbosity level (buffer-local
+  inside the float). Default: `"-"`
+
+`keymaps.close` (string | string[] | false)
+  Key or list of keys to close the float (buffer-local). Accepts a single
+  string, a table of strings, or `false` to disable.
+  Default: `{ "q", "<Esc>" }`
+
+`float.border` (string)
+  Border style passed to `nvim_open_win`. Any value accepted by the
+  `border` option works (e.g. `"none"`, `"single"`, `"double"`,
+  `"rounded"`). Default: `"rounded"`
+
+`float.max_width` (integer)
+  Maximum width of the hover float in columns. Default: `80`
+
+`float.max_height` (integer)
+  Maximum height of the hover float in lines. Default: `30`
+
+Disable a keymap ~
+
+Set any keymap to `false` to prevent it from being registered: >lua
+  require("ts_expand_hover").setup({
+    keymaps = { hover = false },
+  })
+<
+
+This is useful when you want to bind the hover action yourself or use a
+different trigger. All four keymap keys accept a string (custom key) or
+`false` (disabled).
+
+==============================================================================
+KEYMAPS                                         *ts_expand_hover-keymaps*
+
+Default keymaps (all configurable via setup()):
+
+  Key         Scope        Action ~
+  K           global       Open TypeScript hover float at cursor
+  +           float-local  Expand type (increase verbosity level)
+  -           float-local  Collapse type (decrease verbosity level)
+  q, <Esc>    float-local  Close the hover float
+
+`K` is registered as a global normal-mode mapping when `setup()` is called.
+The expand, collapse, and close keys are buffer-local inside the float and
+are registered each time a new float is opened.
+
+To use a different key, pass it in `setup()`: >lua
+  require("ts_expand_hover").setup({
+    keymaps = {
+      hover    = "<leader>th",
+      expand   = "]t",
+      collapse = "[t",
+    },
+  })
+<
+
+To disable a keymap entirely so you can map it yourself: >lua
+  require("ts_expand_hover").setup({
+    keymaps = { hover = false },
+  })
+<
+
+==============================================================================
+HEALTH CHECK                                    *ts_expand_hover-health*
+
+Run the built-in health check: >vim
+  :checkhealth ts_expand_hover
+<
+
+The health check reports:
+
+- NeoVim version (requires 0.10+)
+- Whether vtsls is attached to the current buffer
+- vtsls server version (from LSP `InitializeResult.serverInfo`)
+- TypeScript version (parsed from vtsls server info when available)
+
+Open a TypeScript file before running the check so vtsls has a chance to
+attach. If vtsls is not attached the check will warn and skip the version
+reports.
+
+==============================================================================
+vim:tw=78:ts=8:noet:ft=help:norl:
