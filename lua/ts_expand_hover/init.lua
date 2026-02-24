@@ -29,10 +29,15 @@ end
 
 --- Initialize the plugin with user options.
 --- Compatible with lazy.nvim `opts` table convention.
+--- Registers the hover keymap from config unless keymaps.hover is false.
 ---@param opts table|nil
 ---@return table M for chaining
 function M.setup(opts)
   config.setup(opts)
+  local keymaps = config.get().keymaps
+  if keymaps.hover ~= false then
+    vim.keymap.set("n", keymaps.hover, function() M.hover() end, { desc = "TypeScript expandable hover" })
+  end
   return M
 end
 
