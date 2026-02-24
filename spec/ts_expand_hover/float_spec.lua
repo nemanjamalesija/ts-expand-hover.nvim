@@ -71,6 +71,10 @@ describe("float", function()
 
     -- Capture keymap registrations without registering them.
     stubs.keymap_set = stub(vim.keymap, "set")
+
+    -- Stub treesitter.start to prevent real parser calls in headless test mode.
+    vim.treesitter = vim.treesitter or {}
+    stubs.treesitter_start = stub(vim.treesitter, "start")
   end)
 
   after_each(function()
@@ -174,6 +178,48 @@ describe("float", function()
       assert.is_truthy(footer_text:find("depth: 3"))
     end)
 
+    it("footer shows [max] when canIncreaseVerbosityLevel is false (EXPN-05)", function()
+      local float = fresh_float()
+      local state = new_state({ verbosity = 2 })
+      local max_body = { displayString = "type Foo = string", canIncreaseVerbosityLevel = false }
+
+      float.show(max_body, state)
+
+      local call_args = stubs.nvim_open_win.calls[1]
+      local win_cfg = call_args.vals[3]
+      local footer_text = win_cfg.footer[1][1]
+      assert.is_truthy(footer_text:find("%[max%]"))
+      assert.is_falsy(footer_text:find("%[%+%] expand"))
+    end)
+
+    it("footer shows [-] without collapse label at depth 0 (EXPN-06)", function()
+      local float = fresh_float()
+      -- verbosity = 0 means at_min = true → collapse hint is just [-]
+      local state = new_state({ verbosity = 0 })
+
+      float.show(SUCCESS_BODY, state)
+
+      local call_args = stubs.nvim_open_win.calls[1]
+      local win_cfg = call_args.vals[3]
+      local footer_text = win_cfg.footer[1][1]
+      -- [-] is present (visible but non-functional at min depth)
+      assert.is_truthy(footer_text:find("%[%-%]"))
+      -- [-] collapse should NOT be present at depth 0
+      assert.is_falsy(footer_text:find("%[%-%] collapse"))
+    end)
+
+    it("footer shows [-] collapse when verbosity > 0 (EXPN-06)", function()
+      local float = fresh_float()
+      local state = new_state({ verbosity = 1 })
+
+      float.show(SUCCESS_BODY, state)
+
+      local call_args = stubs.nvim_open_win.calls[1]
+      local win_cfg = call_args.vals[3]
+      local footer_text = win_cfg.footer[1][1]
+      assert.is_truthy(footer_text:find("%[%-%] collapse"))
+    end)
+
     it("registers q and Esc keymaps on float buffer (HOVR-04)", function()
       local float = fresh_float()
       local state = new_state()
@@ -196,6 +242,72 @@ describe("float", function()
       assert.equals(42, registered["q"].buffer)
       assert.is_not_nil(registered["<Esc>"], "expected <Esc> keymap to be registered")
       assert.equals(42, registered["<Esc>"].buffer)
+    end)
+
+    it("registers + and - keymaps when callbacks provided (EXPN-01, EXPN-02)", function()
+      local float = fresh_float()
+      local state = new_state()
+      local expand_cb  = function() end
+      local collapse_cb = function() end
+
+      float.show(SUCCESS_BODY, state, expand_cb, collapse_cb)
+
+      local registered = {}
+      for _, c in ipairs(stubs.keymap_set.calls) do
+        registered[c.vals[2]] = c.vals[4] or {}
+      end
+
+      assert.is_not_nil(registered["+"], "expected + keymap to be registered")
+      assert.equals(42, registered["+"].buffer)
+      assert.is_not_nil(registered["-"], "expected - keymap to be registered")
+      assert.equals(42, registered["-"].buffer)
+    end)
+
+    it("does not register + and - keymaps when callbacks are nil", function()
+      local float = fresh_float()
+      local state = new_state()
+
+      -- No callbacks — only q and <Esc> should be registered.
+      float.show(SUCCESS_BODY, state)
+
+      local registered = {}
+      for _, c in ipairs(stubs.keymap_set.calls) do
+        registered[c.vals[2]] = true
+      end
+
+      assert.is_not_nil(registered["q"])
+      assert.is_not_nil(registered["<Esc>"])
+      assert.is_nil(registered["+"], "expected + keymap NOT to be registered without callback")
+      assert.is_nil(registered["-"], "expected - keymap NOT to be registered without callback")
+    end)
+
+    it("applies treesitter markdown highlighting after content write (HOVR-02)", function()
+      local float = fresh_float()
+      local state = new_state()
+
+      float.show(SUCCESS_BODY, state)
+
+      -- treesitter.start is called via pcall inside _apply_treesitter.
+      -- The stub captures the pcall-wrapped call.
+      assert.stub(stubs.treesitter_start).was.called()
+      -- Called with the float buffer and "markdown" parser.
+      local call_args = stubs.treesitter_start.calls[1]
+      assert.equals(42, call_args.vals[1])
+      assert.equals("markdown", call_args.vals[2])
+    end)
+
+    it("writes fenced typescript code block to buffer (HOVR-02)", function()
+      local float = fresh_float()
+      local state = new_state()
+
+      float.show(SUCCESS_BODY, state)
+
+      local set_lines_call = stubs.nvim_buf_set_lines.calls[1]
+      -- 5th arg is the lines table: bufnr, start, end, strict_indexing, lines
+      local lines = set_lines_call.vals[5]
+      assert.equals("```typescript", lines[1])
+      assert.equals("type Foo = string", lines[2])
+      assert.equals("```", lines[#lines])
     end)
 
   end) -- show (new float)
@@ -222,6 +334,25 @@ describe("float", function()
       assert.stub(stubs.nvim_buf_set_lines).was.called()
       -- Window config should be updated.
       assert.stub(stubs.nvim_win_set_config).was.called()
+    end)
+
+    it("resets scroll to top on in-place update (EXPN-03)", function()
+      local float = fresh_float()
+      -- Simulate an already-open float with winid=100.
+      local state = new_state({ float_winid = 100, float_bufnr = 42 })
+
+      stubs.nvim_win_is_valid:revert()
+      stubs.nvim_win_is_valid = stub(vim.api, "nvim_win_is_valid").returns(true)
+      stubs.nvim_buf_is_valid:revert()
+      stubs.nvim_buf_is_valid = stub(vim.api, "nvim_buf_is_valid").returns(true)
+
+      float.show({ displayString = "type Bar = number" }, state)
+
+      -- nvim_win_set_cursor should be called to reset scroll to row 1, col 0.
+      assert.stub(stubs.nvim_win_set_cursor).was.called()
+      local cursor_call = stubs.nvim_win_set_cursor.calls[1]
+      assert.equals(100, cursor_call.vals[1])
+      assert.same({ 1, 0 }, cursor_call.vals[2])
     end)
 
   end) -- show (in-place update)
