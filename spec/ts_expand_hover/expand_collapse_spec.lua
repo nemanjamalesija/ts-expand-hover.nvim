@@ -346,18 +346,19 @@ describe("expand/collapse", function()
       init.hover()
 
       local state = init.get_state()
-      assert.equals(0, state.generation)
+      -- M.hover() increments generation from 0 to 1 before its lsp.request.
+      assert.equals(1, state.generation)
 
       -- Both + callbacks are the same closure — registered once during _open.
       local expand_cb = find_keymap_cb("+")
       assert.is_not_nil(expand_cb)
 
       expand_cb()
-      assert.equals(1, state.generation)
+      assert.equals(2, state.generation)
 
       -- The same closure still works for the second expand.
       expand_cb()
-      assert.equals(2, state.generation)
+      assert.equals(3, state.generation)
     end)
 
     it("stale response is discarded when generation has advanced", function()
@@ -397,10 +398,11 @@ describe("expand/collapse", function()
       end
 
       -- Trigger expand — request is held (state.requesting becomes true).
+      -- M.hover() incremented generation to 1; expand increments it to 2.
       local expand_cb = find_keymap_cb("+")
       assert.is_not_nil(expand_cb)
       expand_cb()
-      assert.equals(1, state.generation)
+      assert.equals(2, state.generation)
       assert.is_not_nil(held_callback)
 
       -- Clear requesting so we can manually manipulate state.
@@ -426,6 +428,72 @@ describe("expand/collapse", function()
     end)
 
   end) -- generation counter
+
+  -- ================================================================ re-hover invalidation
+
+  describe("re-hover invalidation (EXPN-07)", function()
+
+    it("second M.hover() invalidates outstanding callbacks from the first session", function()
+      -- The first hover holds its callback (simulating an in-flight LSP request).
+      -- The second hover fires immediately and opens a new float.
+      -- When the first hover's stale callback eventually fires, it must be discarded.
+      local held_callback = nil
+      local float_show_calls = 0
+
+      stubs.get_clients:revert()
+      local call_count = 0
+      stubs.get_clients = stub(vim.lsp, "get_clients").invokes(function()
+        local body = { displayString = "x", canIncreaseVerbosityLevel = true }
+        return {{
+          request = function(self, method, params, callback, bufnr)
+            call_count = call_count + 1
+            if call_count == 1 then
+              -- First hover: hold the callback to simulate an in-flight request.
+              held_callback = callback
+            else
+              -- Second hover (and any subsequent): fire immediately.
+              callback(nil, { body = body }, nil)
+            end
+          end,
+        }}
+      end)
+
+      local init = fresh_init()
+
+      -- First hover — callback is held, float is NOT opened yet.
+      init.hover()
+      local state = init.get_state()
+      local gen_after_first = state.generation
+      assert.equals(1, gen_after_first)
+      assert.is_not_nil(held_callback)
+
+      -- Patch float.show to count invocations after this point.
+      local float_module = require("ts_expand_hover.float")
+      local original_show = float_module.show
+      float_module.show = function(...)
+        float_show_calls = float_show_calls + 1
+        original_show(...)
+      end
+
+      -- Second hover — fires immediately, opens a new float, increments generation.
+      init.hover()
+      assert.is_true(state.generation > gen_after_first,
+        "second hover must advance the generation counter")
+      -- float.show was called once for the second hover's response.
+      local show_calls_after_second_hover = float_show_calls
+
+      -- Now fire the stale first-session callback.
+      -- The generation guard inside M.hover()'s callback closure must discard it.
+      held_callback(nil, { body = { displayString = "stale", canIncreaseVerbosityLevel = true } }, nil)
+
+      -- float.show must NOT have been invoked for the stale callback.
+      assert.equals(show_calls_after_second_hover, float_show_calls,
+        "stale first-session callback must not reach float.show")
+
+      float_module.show = original_show
+    end)
+
+  end) -- re-hover invalidation
 
   -- ================================================================ footer state integration
 
