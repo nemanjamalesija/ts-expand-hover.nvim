@@ -3,63 +3,6 @@
 
 local M = {}
 
---- Flatten a SymbolDisplayPart[] array or plain string to a single string.
---- Returns the input unchanged when it is already a string.
---- Returns nil for any other type (nil, boolean, number).
----@param val string|table|nil SymbolDisplayPart[] or plain string
----@return string|nil
-local function _flatten_display_parts(val)
-  if type(val) == "string" then return val end
-  if type(val) == "table" then
-    local texts = {}
-    for _, part in ipairs(val) do
-      if part.text then texts[#texts + 1] = part.text end
-    end
-    return table.concat(texts)
-  end
-  return nil
-end
-
---- Split body.displayString into content lines wrapped in a typescript fenced code block.
---- Appends documentation text (RNDR-02) and JSDoc tags (RNDR-03) when present.
----@param body table LSP response body with displayString field
----@return string[]
-local function _build_lines(body)
-  if not body or not body.displayString then
-    return { "(no type info)" }
-  end
-  local content_lines = vim.split(body.displayString, "\n", { plain = true })
-  local result = { "```typescript" }
-  for _, line in ipairs(content_lines) do
-    result[#result + 1] = line
-  end
-  result[#result + 1] = "```"
-
-  -- Documentation text (RNDR-02)
-  local doc = _flatten_display_parts(body.documentation)
-  if doc and doc ~= "" then
-    result[#result + 1] = ""
-    for _, line in ipairs(vim.split(doc, "\n", { plain = true })) do
-      result[#result + 1] = line
-    end
-  end
-
-  -- JSDoc tags (RNDR-03)
-  if body.tags and #body.tags > 0 then
-    result[#result + 1] = ""
-    for _, tag in ipairs(body.tags) do
-      local text = _flatten_display_parts(tag.text)
-      local tag_lines = vim.split(text or "", "\n", { plain = true })
-      result[#result + 1] = string.format("**@%s** %s", tag.name, tag_lines[1] or "")
-      for i = 2, #tag_lines do
-        result[#result + 1] = tag_lines[i]
-      end
-    end
-  end
-
-  return result
-end
-
 --- Return display width for text.
 ---@param text string
 ---@return integer
@@ -86,11 +29,10 @@ local function _truncate_to_width(text, max_width)
 end
 
 --- Build footer variants ordered from most to least descriptive.
----@param state table Session state with verbosity field
----@param body table|nil LSP response body with canIncreaseVerbosityLevel field
+---@param state table Session state with verbosity and can_expand fields
 ---@return string[]
-local function _build_footer_variants(state, body)
-  local can_expand = body and body.canIncreaseVerbosityLevel
+local function _build_footer_variants(state)
+  local can_expand = state.can_expand
   local at_min     = state.verbosity == 0
 
   local expand_full
@@ -147,15 +89,14 @@ end
 --- Prefers the most descriptive footer that fits while respecting max_width.
 ---@param lines string[]
 ---@param state table
----@param body table|nil
 ---@param cfg table
 ---@return integer width
 ---@return integer height
 ---@return string footer_text
-local function _compute_layout(lines, state, body, cfg)
+local function _compute_layout(lines, state, cfg)
   local content_width = _max_line_width(lines)
   local max_width = math.max(1, cfg.max_width)
-  local variants = _build_footer_variants(state, body)
+  local variants = _build_footer_variants(state)
 
   -- Default to minimal footer when only max-width constrained content fits.
   local chosen_footer = variants[#variants]
@@ -317,19 +258,19 @@ end
 
 --- Open a focused float or update the existing one in-place.
 --- Entry point called from init.lua on every LSP response.
----@param body table LSP response body { displayString, canIncreaseVerbosityLevel, ... }
+---@param hover { lines: string[], can_expand: boolean } normalized answer built by lsp.lua
 ---@param state table Session state
 ---@param on_expand function|nil callback fired when user presses + inside the float
 ---@param on_collapse function|nil callback fired when user presses - inside the float
-function M.show(body, state, on_expand, on_collapse)
-  local cfg    = require("ts_expand_hover.config").get().float
-  local lines  = _build_lines(body)
+function M.show(hover, state, on_expand, on_collapse)
+  local cfg   = require("ts_expand_hover.config").get().float
+  local lines = hover.lines
 
   -- Store can_expand in state so expand/collapse handlers can read it without
-  -- needing a reference to the full body table.
-  state.can_expand = body and body.canIncreaseVerbosityLevel or false
+  -- needing a reference to the hover table.
+  state.can_expand = hover.can_expand
 
-  local width, height, footer = _compute_layout(lines, state, body, cfg)
+  local width, height, footer = _compute_layout(lines, state, cfg)
 
   if state.float_winid and vim.api.nvim_win_is_valid(state.float_winid) then
     _update(lines, footer, width, height, state)

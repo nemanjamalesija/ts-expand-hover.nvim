@@ -1,5 +1,8 @@
---- vtsls request pipeline for ts-expand-hover.nvim.
---- Sends quickinfo with verbosityLevel; falls back to vim.lsp.buf.hover() on any failure.
+--- Request pipeline for ts-expand-hover.nvim.
+--- Sends quickinfo to vtsls with verbosityLevel and turns the answer into one
+--- shape before the float sees it:
+---   { lines = string[], can_expand = boolean }
+--- Falls back to vim.lsp.buf.hover() on any failure.
 
 local M = {}
 
@@ -14,12 +17,73 @@ local function find_vtsls_client(bufnr)
   return clients[1]
 end
 
---- Send a quickinfo request to vtsls with verbosityLevel.
+local function fallback_to_builtin_hover()
+  vim.schedule(function()
+    vim.lsp.buf.hover()
+  end)
+end
+
+--- Flatten a SymbolDisplayPart[] array or plain string to a single string.
+--- Returns the input unchanged when it is already a string.
+--- Returns nil for any other type (nil, boolean, number).
+---@param val string|table|nil SymbolDisplayPart[] or plain string
+---@return string|nil
+local function flatten_display_parts(val)
+  if type(val) == "string" then return val end
+  if type(val) == "table" then
+    local texts = {}
+    for _, part in ipairs(val) do
+      if part.text then texts[#texts + 1] = part.text end
+    end
+    return table.concat(texts)
+  end
+  return nil
+end
+
+--- Turn a tsserver quickinfo body into markdown lines: the type inside a
+--- typescript fence, then the documentation text, then the JSDoc tags.
+---@param body table quickinfo body with displayString, documentation, tags
+---@return string[]
+local function quickinfo_lines(body)
+  if not body.displayString then
+    return { "(no type info)" }
+  end
+  local result = { "```typescript" }
+  for _, line in ipairs(vim.split(body.displayString, "\n", { plain = true })) do
+    result[#result + 1] = line
+  end
+  result[#result + 1] = "```"
+
+  local doc = flatten_display_parts(body.documentation)
+  if doc and doc ~= "" then
+    result[#result + 1] = ""
+    for _, line in ipairs(vim.split(doc, "\n", { plain = true })) do
+      result[#result + 1] = line
+    end
+  end
+
+  if body.tags and #body.tags > 0 then
+    result[#result + 1] = ""
+    for _, tag in ipairs(body.tags) do
+      local text = flatten_display_parts(tag.text)
+      local tag_lines = vim.split(text or "", "\n", { plain = true })
+      result[#result + 1] = string.format("**@%s** %s", tag.name, tag_lines[1] or "")
+      for i = 2, #tag_lines do
+        result[#result + 1] = tag_lines[i]
+      end
+    end
+  end
+
+  return result
+end
+
+--- Send a quickinfo request to vtsls with verbosityLevel and hand the
+--- normalized answer to opts.callback.
 --- Falls back to vim.lsp.buf.hover() when vtsls is not attached (COMP-01)
 --- or when the response indicates an error or TypeScript < 5.9 (COMP-02).
 --- Drops silently if a request is already in-flight (EXPN-07).
 ---
----@param opts { bufnr: integer, row: integer, col: integer, verbosity: integer, state: table, callback: fun(body: table) }
+---@param opts { bufnr: integer, row: integer, col: integer, verbosity: integer, state: table, callback: fun(hover: { lines: string[], can_expand: boolean }) }
 function M.request(opts)
   -- COMP-01: fall back when vtsls is not attached to this buffer.
   local client = find_vtsls_client(opts.bufnr)
@@ -34,8 +98,7 @@ function M.request(opts)
   end
   opts.state.requesting = true
 
-  -- row is 0-indexed (from nvim_win_get_cursor); tsserver line is 1-indexed.
-  -- col is 0-indexed (from nvim_win_get_cursor); tsserver offset is 1-indexed.
+  -- row and col are 0-indexed (from nvim_win_get_cursor); tsserver wants 1-indexed.
   local params = {
     command   = "typescript.tsserverRequest",
     arguments = {
@@ -50,18 +113,18 @@ function M.request(opts)
   }
 
   client:request("workspace/executeCommand", params, function(err, result)
-    -- Always clear the in-flight guard first.
     opts.state.requesting = false
 
-    -- COMP-02: fall back on any error or missing body (covers TS < 5.9).
+    -- Any error or missing body (TypeScript < 5.9 included) falls back (COMP-02).
     if err or not result or not result.body then
-      vim.schedule(function()
-        vim.lsp.buf.hover()
-      end)
+      fallback_to_builtin_hover()
       return
     end
 
-    opts.callback(result.body)
+    opts.callback({
+      lines      = quickinfo_lines(result.body),
+      can_expand = result.body.canIncreaseVerbosityLevel or false,
+    })
   end, opts.bufnr)
 end
 

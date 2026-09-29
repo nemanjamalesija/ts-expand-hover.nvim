@@ -24,7 +24,7 @@ local function new_state(overrides)
   return s
 end
 
-local SUCCESS_BODY = { displayString = "type Foo = string", canIncreaseVerbosityLevel = true }
+local SUCCESS_HOVER = { lines = { "```typescript", "type Foo = string", "```" }, can_expand = true }
 
 -- Stubs table — populated in before_each, reverted in after_each.
 local stubs = {}
@@ -96,7 +96,7 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state()
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       assert.stub(stubs.nvim_open_win).was.called()
       -- Second argument to nvim_open_win is `enter` — must be true.
@@ -111,7 +111,7 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state()
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       local call_args = stubs.nvim_open_win.calls[1]
       local win_cfg = call_args.vals[3]
@@ -123,9 +123,9 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state()
 
-      -- Body with a very long displayString (100 chars).
-      local long_body = { displayString = string.rep("x", 100) }
-      float.show(long_body, state)
+      -- A hover with one very long line (100 chars).
+      local long_hover = { lines = { string.rep("x", 100) } }
+      float.show(long_hover, state)
 
       local call_args = stubs.nvim_open_win.calls[1]
       local win_cfg = call_args.vals[3]
@@ -137,11 +137,10 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state()
 
-      -- Body with 20 lines separated by newlines.
+      -- A hover with 20 lines.
       local lines = {}
       for i = 1, 20 do lines[i] = "line " .. i end
-      local tall_body = { displayString = table.concat(lines, "\n") }
-      float.show(tall_body, state)
+      float.show({ lines = lines }, state)
 
       local call_args = stubs.nvim_open_win.calls[1]
       local win_cfg = call_args.vals[3]
@@ -152,14 +151,14 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state({ verbosity = 0 })
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       local call_args = stubs.nvim_open_win.calls[1]
       local win_cfg = call_args.vals[3]
       -- footer is { { text, hl_group } }
       local footer_text = win_cfg.footer[1][1]
       assert.is_truthy(footer_text:find("depth: 0"))
-      -- At verbosity 0 with canIncreaseVerbosityLevel=true: expand shows [+] expand,
+      -- At verbosity 0 with can_expand=true: expand shows [+] expand,
       -- collapse shows [-] (non-functional at_min state per EXPN-06).
       assert.is_truthy(footer_text:find("%[%+%] expand"))
       assert.is_truthy(footer_text:find("%[%-%]"))
@@ -170,7 +169,7 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state({ verbosity = 3 })
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       local call_args = stubs.nvim_open_win.calls[1]
       local win_cfg = call_args.vals[3]
@@ -178,12 +177,12 @@ describe("float", function()
       assert.is_truthy(footer_text:find("depth: 3"))
     end)
 
-    it("footer shows [max] when canIncreaseVerbosityLevel is false (EXPN-05)", function()
+    it("footer shows [max] when can_expand is false (EXPN-05)", function()
       local float = fresh_float()
       local state = new_state({ verbosity = 2 })
-      local max_body = { displayString = "type Foo = string", canIncreaseVerbosityLevel = false }
+      local max_hover = { lines = { "type Foo = string" }, can_expand = false }
 
-      float.show(max_body, state)
+      float.show(max_hover, state)
 
       local call_args = stubs.nvim_open_win.calls[1]
       local win_cfg = call_args.vals[3]
@@ -197,7 +196,7 @@ describe("float", function()
       -- verbosity = 0 means at_min = true → collapse hint is just [-]
       local state = new_state({ verbosity = 0 })
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       local call_args = stubs.nvim_open_win.calls[1]
       local win_cfg = call_args.vals[3]
@@ -212,7 +211,7 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state({ verbosity = 1 })
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       local call_args = stubs.nvim_open_win.calls[1]
       local win_cfg = call_args.vals[3]
@@ -223,9 +222,9 @@ describe("float", function()
     it("widens float so full footer fits when max_width allows it", function()
       local float = fresh_float()
       local state = new_state({ verbosity = 2 })
-      local short_body = { displayString = "x", canIncreaseVerbosityLevel = true }
+      local short_hover = { lines = { "x" }, can_expand = true }
 
-      float.show(short_body, state)
+      float.show(short_hover, state)
 
       local call_args = stubs.nvim_open_win.calls[1]
       local win_cfg = call_args.vals[3]
@@ -239,7 +238,7 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state({ verbosity = 1 })
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       local call_args = stubs.nvim_open_win.calls[1]
       local win_cfg = call_args.vals[3]
@@ -254,7 +253,7 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state()
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       -- keymap.set should have been called at least twice.
       local calls = stubs.keymap_set.calls
@@ -280,7 +279,7 @@ describe("float", function()
       local expand_cb  = function() end
       local collapse_cb = function() end
 
-      float.show(SUCCESS_BODY, state, expand_cb, collapse_cb)
+      float.show(SUCCESS_HOVER, state, expand_cb, collapse_cb)
 
       local registered = {}
       for _, c in ipairs(stubs.keymap_set.calls) do
@@ -302,7 +301,7 @@ describe("float", function()
       local state = new_state()
 
       -- No callbacks — only q and <Esc> should be registered.
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       local registered = {}
       for _, c in ipairs(stubs.keymap_set.calls) do
@@ -319,7 +318,7 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state()
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       -- treesitter.start is called via pcall inside _apply_treesitter.
       -- The stub captures the pcall-wrapped call.
@@ -330,18 +329,16 @@ describe("float", function()
       assert.equals("markdown", call_args.vals[2])
     end)
 
-    it("writes fenced typescript code block to buffer (HOVR-02)", function()
+    it("writes the hover lines to the buffer (HOVR-02)", function()
       local float = fresh_float()
       local state = new_state()
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       local set_lines_call = stubs.nvim_buf_set_lines.calls[1]
       -- 5th arg is the lines table: bufnr, start, end, strict_indexing, lines
       local lines = set_lines_call.vals[5]
-      assert.equals("```typescript", lines[1])
-      assert.equals("type Foo = string", lines[2])
-      assert.equals("```", lines[#lines])
+      assert.same({ "```typescript", "type Foo = string", "```" }, lines)
     end)
 
   end) -- show (new float)
@@ -360,7 +357,7 @@ describe("float", function()
       stubs.nvim_buf_is_valid:revert()
       stubs.nvim_buf_is_valid = stub(vim.api, "nvim_buf_is_valid").returns(true)
 
-      float.show({ displayString = "type Bar = number" }, state)
+      float.show({ lines = { "type Bar = number" }, can_expand = false }, state)
 
       -- No new window should be opened.
       assert.stub(stubs.nvim_open_win).was_not.called()
@@ -380,7 +377,7 @@ describe("float", function()
       stubs.nvim_buf_is_valid:revert()
       stubs.nvim_buf_is_valid = stub(vim.api, "nvim_buf_is_valid").returns(true)
 
-      float.show({ displayString = "type Bar = number" }, state)
+      float.show({ lines = { "type Bar = number" }, can_expand = false }, state)
 
       -- nvim_win_set_cursor should be called to reset scroll to row 1, col 0.
       assert.stub(stubs.nvim_win_set_cursor).was.called()
@@ -434,7 +431,7 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state({ source_bufnr = 7 })
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       -- nvim_create_augroup should be called with a name containing the window ID.
       assert.stub(stubs.nvim_create_augroup).was.called()
@@ -461,7 +458,7 @@ describe("float", function()
       local float = fresh_float()
       local state = new_state({ source_bufnr = 7 })
 
-      float.show(SUCCESS_BODY, state)
+      float.show(SUCCESS_HOVER, state)
 
       assert.stub(stubs.nvim_create_autocmd).was.called()
       local autocmd_call = stubs.nvim_create_autocmd.calls[1]
@@ -475,175 +472,5 @@ describe("float", function()
     end)
 
   end) -- auto-close
-
-  -- ============================================================ edge cases
-
-  describe("edge cases", function()
-
-    it("handles nil body gracefully", function()
-      local float = fresh_float()
-      local state = new_state()
-
-      assert.has_no.errors(function()
-        float.show(nil, state)
-      end)
-
-      assert.stub(stubs.nvim_buf_set_lines).was.called()
-      local set_lines_call = stubs.nvim_buf_set_lines.calls[1]
-      -- 4th arg is the lines table (bufnr, start, end, strict_indexing, lines)
-      local lines = set_lines_call.vals[5]
-      assert.equals("(no type info)", lines[1])
-    end)
-
-    it("handles body with no displayString", function()
-      local float = fresh_float()
-      local state = new_state()
-
-      assert.has_no.errors(function()
-        float.show({ canIncreaseVerbosityLevel = true }, state)
-      end)
-
-      assert.stub(stubs.nvim_buf_set_lines).was.called()
-      local set_lines_call = stubs.nvim_buf_set_lines.calls[1]
-      local lines = set_lines_call.vals[5]
-      assert.equals("(no type info)", lines[1])
-    end)
-
-  end) -- edge cases
-
-  -- ============================================================ content rendering
-
-  describe("content rendering", function()
-
-    -- Helper: run show() and return the lines written to the buffer.
-    local function shown_lines(body)
-      local float = fresh_float()
-      local state = new_state()
-      float.show(body, state)
-      return stubs.nvim_buf_set_lines.calls[1].vals[5]
-    end
-
-    -- RNDR-01 ------------------------------------------------------------
-
-    it("renders fenced typescript code block (RNDR-01)", function()
-      local lines = shown_lines(SUCCESS_BODY)
-      assert.equals("```typescript",    lines[1])
-      assert.equals("type Foo = string", lines[2])
-      assert.equals("```",              lines[#lines])
-    end)
-
-    -- RNDR-02 ------------------------------------------------------------
-
-    it("renders documentation text below type block (RNDR-02)", function()
-      local body = {
-        displayString = "function greet(name: string): string",
-        documentation = "Greets the given name.",
-        tags          = {},
-      }
-      local lines = shown_lines(body)
-
-      -- Type block
-      assert.equals("```typescript", lines[1])
-      assert.equals("function greet(name: string): string", lines[2])
-      assert.equals("```",           lines[3])
-
-      -- Blank separator then documentation
-      assert.equals("",                     lines[4])
-      assert.equals("Greets the given name.", lines[5])
-    end)
-
-    it("handles multi-line documentation (RNDR-02)", function()
-      local body = {
-        displayString = "const x: number",
-        documentation = "Line one.\nLine two.",
-        tags          = {},
-      }
-      local lines = shown_lines(body)
-
-      -- Fence block is 3 lines; blank sep at [4]
-      assert.equals("Line one.", lines[5])
-      assert.equals("Line two.", lines[6])
-    end)
-
-    it("skips documentation section when documentation is empty (RNDR-02)", function()
-      local body = {
-        displayString = "const x: number",
-        documentation = "",
-        tags          = {},
-      }
-      local lines = shown_lines(body)
-
-      -- Single-line type → fence is exactly 3 lines; no extras when docs empty
-      assert.equals(3, #lines)
-      assert.equals("```typescript",  lines[1])
-      assert.equals("const x: number", lines[2])
-      assert.equals("```",             lines[3])
-    end)
-
-    -- RNDR-03 ------------------------------------------------------------
-
-    it("renders JSDoc tags below documentation (RNDR-03)", function()
-      local body = {
-        displayString = "function greet(name: string): string",
-        documentation = "Greets the given name.",
-        tags = {
-          { name = "param",   text = "name The name" },
-          { name = "returns", text = "A greeting" },
-        },
-      }
-      local lines = shown_lines(body)
-
-      -- Check tag lines exist somewhere in the output
-      local joined = table.concat(lines, "\n")
-      assert.is_truthy(joined:find("**@param** name The name",   1, true))
-      assert.is_truthy(joined:find("**@returns** A greeting",    1, true))
-    end)
-
-    it("renders tags without documentation (RNDR-03)", function()
-      local body = {
-        displayString = "function greet(name: string): string",
-        documentation = "",
-        tags = {
-          { name = "deprecated", text = "Use hi() instead" },
-        },
-      }
-      local lines = shown_lines(body)
-
-      -- Fence block (3 lines), blank sep, tag line
-      assert.equals("```typescript", lines[1])
-      assert.equals("```",           lines[3])
-      assert.equals("",              lines[4])
-      assert.equals("**@deprecated** Use hi() instead", lines[5])
-    end)
-
-    it("handles SymbolDisplayPart arrays in documentation and tags (RNDR-03)", function()
-      local body = {
-        displayString = "type X = string",
-        documentation = { { kind = "text", text = "A desc." } },
-        tags = {
-          { name = "deprecated", text = { { kind = "text", text = "Use Y." } } },
-        },
-      }
-      local lines = shown_lines(body)
-
-      local joined = table.concat(lines, "\n")
-      assert.is_truthy(joined:find("A desc.",             1, true))
-      assert.is_truthy(joined:find("**@deprecated** Use Y.", 1, true))
-    end)
-
-    it("skips tags section when tags is empty (RNDR-03)", function()
-      local body = {
-        displayString = "const x: number",
-        documentation = "Some docs.",
-        tags          = {},
-      }
-      local lines = shown_lines(body)
-
-      -- Fence (3) + blank (1) + doc (1) = 5 total; no trailing blank for tags
-      assert.equals(5, #lines)
-      assert.equals("Some docs.", lines[5])
-    end)
-
-  end) -- content rendering
 
 end)

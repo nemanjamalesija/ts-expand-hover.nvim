@@ -499,8 +499,8 @@ describe("expand/collapse", function()
 
   describe("footer state integration (EXPN-08)", function()
 
-    it("float.show is called with max-depth body after expanding to limit", function()
-      local last_body_seen = nil
+    it("float.show is called with a max-depth hover after expanding to limit", function()
+      local last_hover_seen = nil
       local max_body = {
         displayString             = "type Foo = string",
         canIncreaseVerbosityLevel = false,  -- max depth reached
@@ -526,21 +526,21 @@ describe("expand/collapse", function()
       local init = fresh_init()
       init.hover()
 
-      -- Patch float.show to capture the body argument.
+      -- Patch float.show to capture the hover argument.
       local float_module = require("ts_expand_hover.float")
       local original_show = float_module.show
-      float_module.show = function(body, ...)
-        last_body_seen = body
-        original_show(body, ...)
+      float_module.show = function(hover, ...)
+        last_hover_seen = hover
+        original_show(hover, ...)
       end
 
       local expand_cb = find_keymap_cb("+")
       assert.is_not_nil(expand_cb)
       expand_cb()
 
-      -- The body passed to float.show on expand should have canIncreaseVerbosityLevel = false.
-      assert.is_not_nil(last_body_seen)
-      assert.is_false(last_body_seen.canIncreaseVerbosityLevel)
+      -- The hover passed to float.show on expand carries can_expand = false.
+      assert.is_not_nil(last_hover_seen)
+      assert.is_false(last_hover_seen.can_expand)
 
       float_module.show = original_show
     end)

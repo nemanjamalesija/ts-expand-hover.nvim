@@ -13,7 +13,7 @@ local state = {
   generation   = 0,     -- monotonic counter for stale response rejection
   source_bufnr = nil,
   source_pos   = nil,   -- { row, col } captured in M.hover() for re-requests
-  can_expand   = false, -- set by float.show() from body.canIncreaseVerbosityLevel
+  can_expand   = false, -- set by float.show() from hover.can_expand
   requesting   = false, -- concurrent request guard (EXPN-07)
   float_winid  = nil,   -- set by float.show()
   float_bufnr  = nil,   -- set by float.show()
@@ -44,7 +44,7 @@ end
 --- Expand the current type one verbosity level.
 --- Silent no-op when at max expansion or when a request is already in-flight.
 local function _do_expand()
-  -- EXPN-05: silent no-op when canIncreaseVerbosityLevel is falsy (nil or false).
+  -- EXPN-05: silent no-op when the server said the type cannot expand further.
   if not state.can_expand then return end
   -- EXPN-07: drop if a request is already in-flight.
   if state.requesting then return end
@@ -59,11 +59,11 @@ local function _do_expand()
     col       = state.source_pos[2],
     verbosity = state.verbosity,
     state     = state,
-    callback  = function(body)
+    callback  = function(hover)
       vim.schedule(function()
         -- Stale response guard: discard if a newer request has completed.
         if state.generation ~= gen then return end
-        float.show(body, state, function() _do_expand() end, function() _do_collapse() end)
+        float.show(hover, state, function() _do_expand() end, function() _do_collapse() end)
       end)
     end,
   })
@@ -87,11 +87,11 @@ local function _do_collapse()
     col       = state.source_pos[2],
     verbosity = state.verbosity,
     state     = state,
-    callback  = function(body)
+    callback  = function(hover)
       vim.schedule(function()
         -- Stale response guard: discard if a newer request has completed.
         if state.generation ~= gen then return end
-        float.show(body, state, function() _do_expand() end, function() _do_collapse() end)
+        float.show(hover, state, function() _do_expand() end, function() _do_collapse() end)
       end)
     end,
   })
@@ -124,11 +124,11 @@ function M.hover()
     col       = col,
     verbosity = state.verbosity,
     state     = state,
-    callback  = function(body)
+    callback  = function(hover)
       vim.schedule(function()
         -- Stale response guard: discard if a newer hover session has started.
         if state.generation ~= gen then return end
-        float.show(body, state, function() _do_expand() end, function() _do_collapse() end)
+        float.show(hover, state, function() _do_expand() end, function() _do_collapse() end)
       end)
     end,
   })

@@ -61,7 +61,7 @@ describe("lsp.request", function()
 
   -- ------------------------------------------------------------------ COMP-01
 
-  it("calls vim.lsp.buf.hover() when no vtsls client is attached (COMP-01)", function()
+  it("calls vim.lsp.buf.hover() when no supported client is attached (COMP-01)", function()
     get_clients_stub = stub(vim.lsp, "get_clients").returns({})
     local lsp = fresh_lsp()
 
@@ -232,23 +232,42 @@ describe("lsp.request", function()
 
   -- ------------------------------------------------------------------ Happy path
 
-  it("calls callback with body on successful response", function()
-    local expected_body = { displayString = "type Foo = string", canIncreaseVerbosityLevel = true }
-    local fake_client = make_fake_client(nil, { body = expected_body })
+  it("calls callback with lines and can_expand on successful response", function()
+    local body = { displayString = "type Foo = string", canIncreaseVerbosityLevel = true }
+    local fake_client = make_fake_client(nil, { body = body })
     get_clients_stub = stub(vim.lsp, "get_clients").returns({ fake_client })
     local lsp = fresh_lsp()
 
-    local received_body = nil
+    local received = nil
     lsp.request({
       bufnr     = 1,
       row       = 0,
       col       = 0,
       verbosity = 0,
       state     = { requesting = false },
-      callback  = function(body) received_body = body end,
+      callback  = function(hover) received = hover end,
     })
 
-    assert.are.equal(expected_body, received_body)
+    assert.same({ "```typescript", "type Foo = string", "```" }, received.lines)
+    assert.is_true(received.can_expand)
+  end)
+
+  it("reports can_expand false when vtsls leaves canIncreaseVerbosityLevel out", function()
+    local fake_client = make_fake_client(nil, { body = { displayString = "type Foo = string" } })
+    get_clients_stub = stub(vim.lsp, "get_clients").returns({ fake_client })
+    local lsp = fresh_lsp()
+
+    local received = nil
+    lsp.request({
+      bufnr     = 1,
+      row       = 0,
+      col       = 0,
+      verbosity = 0,
+      state     = { requesting = false },
+      callback  = function(hover) received = hover end,
+    })
+
+    assert.is_false(received.can_expand)
   end)
 
   it("sends correct params with coordinate conversion (row+1, col+1)", function()
@@ -272,4 +291,142 @@ describe("lsp.request", function()
     assert.equals(2,           captured.params.arguments[2].verbosityLevel)
     assert.equals("/fake/test.ts", captured.params.arguments[2].file)
   end)
+
+  -- ------------------------------------------------------------------ vtsls quickinfo rendering
+
+  describe("vtsls quickinfo rendering", function()
+
+    -- Helper: send a request answered with the given quickinfo body and
+    -- return the lines the callback receives.
+    local function rendered_lines(body)
+      local fake_client = make_fake_client(nil, { body = body })
+      get_clients_stub = stub(vim.lsp, "get_clients").returns({ fake_client })
+      local lsp = fresh_lsp()
+
+      local received = nil
+      lsp.request({
+        bufnr     = 1,
+        row       = 0,
+        col       = 0,
+        verbosity = 0,
+        state     = { requesting = false },
+        callback  = function(hover) received = hover end,
+      })
+      return received.lines
+    end
+
+    it("renders fenced typescript code block (RNDR-01)", function()
+      local lines = rendered_lines({ displayString = "type Foo = string" })
+      assert.equals("```typescript",    lines[1])
+      assert.equals("type Foo = string", lines[2])
+      assert.equals("```",              lines[#lines])
+    end)
+
+    it("shows a placeholder when the body has no displayString", function()
+      local lines = rendered_lines({ canIncreaseVerbosityLevel = true })
+      assert.equals("(no type info)", lines[1])
+    end)
+
+    it("renders documentation text below type block (RNDR-02)", function()
+      local lines = rendered_lines({
+        displayString = "function greet(name: string): string",
+        documentation = "Greets the given name.",
+        tags          = {},
+      })
+
+      -- Type block
+      assert.equals("```typescript", lines[1])
+      assert.equals("function greet(name: string): string", lines[2])
+      assert.equals("```",           lines[3])
+
+      -- Blank separator then documentation
+      assert.equals("",                     lines[4])
+      assert.equals("Greets the given name.", lines[5])
+    end)
+
+    it("handles multi-line documentation (RNDR-02)", function()
+      local lines = rendered_lines({
+        displayString = "const x: number",
+        documentation = "Line one.\nLine two.",
+        tags          = {},
+      })
+
+      -- Fence block is 3 lines; blank sep at [4]
+      assert.equals("Line one.", lines[5])
+      assert.equals("Line two.", lines[6])
+    end)
+
+    it("skips documentation section when documentation is empty (RNDR-02)", function()
+      local lines = rendered_lines({
+        displayString = "const x: number",
+        documentation = "",
+        tags          = {},
+      })
+
+      -- Single-line type → fence is exactly 3 lines; no extras when docs empty
+      assert.equals(3, #lines)
+      assert.equals("```typescript",  lines[1])
+      assert.equals("const x: number", lines[2])
+      assert.equals("```",             lines[3])
+    end)
+
+    it("renders JSDoc tags below documentation (RNDR-03)", function()
+      local lines = rendered_lines({
+        displayString = "function greet(name: string): string",
+        documentation = "Greets the given name.",
+        tags = {
+          { name = "param",   text = "name The name" },
+          { name = "returns", text = "A greeting" },
+        },
+      })
+
+      local joined = table.concat(lines, "\n")
+      assert.is_truthy(joined:find("**@param** name The name",   1, true))
+      assert.is_truthy(joined:find("**@returns** A greeting",    1, true))
+    end)
+
+    it("renders tags without documentation (RNDR-03)", function()
+      local lines = rendered_lines({
+        displayString = "function greet(name: string): string",
+        documentation = "",
+        tags = {
+          { name = "deprecated", text = "Use hi() instead" },
+        },
+      })
+
+      -- Fence block (3 lines), blank sep, tag line
+      assert.equals("```typescript", lines[1])
+      assert.equals("```",           lines[3])
+      assert.equals("",              lines[4])
+      assert.equals("**@deprecated** Use hi() instead", lines[5])
+    end)
+
+    it("handles SymbolDisplayPart arrays in documentation and tags (RNDR-03)", function()
+      local lines = rendered_lines({
+        displayString = "type X = string",
+        documentation = { { kind = "text", text = "A desc." } },
+        tags = {
+          { name = "deprecated", text = { { kind = "text", text = "Use Y." } } },
+        },
+      })
+
+      local joined = table.concat(lines, "\n")
+      assert.is_truthy(joined:find("A desc.",             1, true))
+      assert.is_truthy(joined:find("**@deprecated** Use Y.", 1, true))
+    end)
+
+    it("skips tags section when tags is empty (RNDR-03)", function()
+      local lines = rendered_lines({
+        displayString = "const x: number",
+        documentation = "Some docs.",
+        tags          = {},
+      })
+
+      -- Fence (3) + blank (1) + doc (1) = 5 total; no trailing blank for tags
+      assert.equals(5, #lines)
+      assert.equals("Some docs.", lines[5])
+    end)
+
+  end) -- vtsls quickinfo rendering
+
 end)
