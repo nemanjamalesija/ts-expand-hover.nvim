@@ -1,6 +1,6 @@
 --- Request pipeline for ts-expand-hover.nvim.
---- Sends quickinfo to vtsls with verbosityLevel and turns the answer into one
---- shape before the float sees it:
+--- Talks to vtsls or to the TypeScript 7 server (tsc, also known as tsgo) and
+--- turns both answers into one shape before the float sees them:
 ---   { lines = string[], can_expand = boolean }
 --- Falls back to vim.lsp.buf.hover() on any failure.
 
@@ -9,12 +9,22 @@ local M = {}
 -- Compat shim: vim.lsp.get_active_clients() deprecated in NeoVim 0.10, removed in 0.11.
 local get_clients = vim.lsp.get_clients or vim.lsp.get_active_clients
 
---- Find the vtsls client attached to the given buffer, or nil.
----@param bufnr integer
----@return table|nil
-local function find_vtsls_client(bufnr)
-  local clients = get_clients({ bufnr = bufnr, name = "vtsls" })
-  return clients[1]
+-- vtsls comes first so a buffer with both servers attached keeps the vtsls
+-- behaviour. "tsgo" is the older nvim-lspconfig name for the TypeScript 7
+-- server, kept for setups that still use it.
+local SERVERS = { "vtsls", "tsc", "tsgo" }
+
+--- Find the first supported client, attached to the given buffer or, when
+--- bufnr is nil, to any buffer.
+---@param bufnr integer|nil
+---@return table|nil client
+---@return string|nil name
+function M.find_client(bufnr)
+  for _, name in ipairs(SERVERS) do
+    local client = get_clients({ bufnr = bufnr, name = name })[1]
+    if client then return client, name end
+  end
+  return nil, nil
 end
 
 local function fallback_to_builtin_hover()
@@ -77,27 +87,11 @@ local function quickinfo_lines(body)
   return result
 end
 
---- Send a quickinfo request to vtsls with verbosityLevel and hand the
---- normalized answer to opts.callback.
---- Falls back to vim.lsp.buf.hover() when vtsls is not attached (COMP-01)
---- or when the response indicates an error or TypeScript < 5.9 (COMP-02).
---- Drops silently if a request is already in-flight (EXPN-07).
----
----@param opts { bufnr: integer, row: integer, col: integer, verbosity: integer, state: table, callback: fun(hover: { lines: string[], can_expand: boolean }) }
-function M.request(opts)
-  -- COMP-01: fall back when vtsls is not attached to this buffer.
-  local client = find_vtsls_client(opts.bufnr)
-  if not client then
-    vim.lsp.buf.hover()
-    return
-  end
-
-  -- EXPN-07: drop silently if a request is already in-flight.
-  if opts.state.requesting then
-    return
-  end
-  opts.state.requesting = true
-
+--- vtsls has no hover verbosity of its own. It exposes tsserver's quickinfo
+--- command through workspace/executeCommand, and quickinfo takes verbosityLevel.
+---@param client table
+---@param opts table see M.request
+local function request_vtsls(client, opts)
   -- row and col are 0-indexed (from nvim_win_get_cursor); tsserver wants 1-indexed.
   local params = {
     command   = "typescript.tsserverRequest",
@@ -126,6 +120,64 @@ function M.request(opts)
       can_expand = result.body.canIncreaseVerbosityLevel or false,
     })
   end, opts.bufnr)
+end
+
+--- The TypeScript 7 server takes verbosityLevel on a plain textDocument/hover
+--- request and answers with markdown plus canIncreaseVerbosity. It sends
+--- canIncreaseVerbosity only when the client declared the
+--- experimental.hoverVerbosityLevel capability; without it the flag is missing,
+--- so expand stays a no-op. :checkhealth ts_expand_hover reports that case.
+---@param client table
+---@param opts table see M.request
+local function request_tsgo(client, opts)
+  local params = {
+    textDocument   = { uri = vim.uri_from_bufnr(opts.bufnr) },
+    position       = {
+      line      = opts.row,
+      character = vim.lsp.util.character_offset(opts.bufnr, opts.row, opts.col, client.offset_encoding),
+    },
+    verbosityLevel = opts.verbosity,
+  }
+
+  client:request("textDocument/hover", params, function(err, result)
+    opts.state.requesting = false
+
+    if err or not result or not result.contents then
+      fallback_to_builtin_hover()
+      return
+    end
+
+    opts.callback({
+      lines      = vim.lsp.util.convert_input_to_markdown_lines(result.contents),
+      can_expand = result.canIncreaseVerbosity or false,
+    })
+  end, opts.bufnr)
+end
+
+--- Ask the attached TypeScript server for the hover at verbosity level
+--- opts.verbosity and hand the normalized answer to opts.callback.
+--- Falls back to vim.lsp.buf.hover() when no supported server is attached
+--- (COMP-01) or when the server answers with an error (COMP-02).
+--- Drops silently if a request is already in-flight (EXPN-07).
+---
+---@param opts { bufnr: integer, row: integer, col: integer, verbosity: integer, state: table, callback: fun(hover: { lines: string[], can_expand: boolean }) }
+function M.request(opts)
+  local client, name = M.find_client(opts.bufnr)
+  if not client then
+    vim.lsp.buf.hover()
+    return
+  end
+
+  if opts.state.requesting then
+    return
+  end
+  opts.state.requesting = true
+
+  if name == "vtsls" then
+    request_vtsls(client, opts)
+  else
+    request_tsgo(client, opts)
+  end
 end
 
 return M

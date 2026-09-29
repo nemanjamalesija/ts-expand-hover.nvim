@@ -3,6 +3,25 @@
 
 local M = {}
 
+--- The TypeScript 7 server sends canIncreaseVerbosity only when the client
+--- declared this capability. Without it the plugin never learns that a type
+--- can expand, so + does nothing.
+---@param client table
+local function check_verbosity_capability(client)
+  -- NeoVim 0.11+ keeps the resolved capabilities on client.capabilities,
+  -- 0.10 keeps them on client.config.capabilities.
+  local caps = client.capabilities or client.config.capabilities or {}
+  local declared = caps.experimental and caps.experimental.hoverVerbosityLevel
+  if declared then
+    vim.health.ok("experimental.hoverVerbosityLevel capability is declared")
+  else
+    vim.health.error(
+      "experimental.hoverVerbosityLevel capability is not declared, so + does nothing",
+      { "Add capabilities = { experimental = { hoverVerbosityLevel = true } } to the tsc LSP config (see README)" }
+    )
+  end
+end
+
 M.check = function()
   vim.health.start("ts_expand_hover")
 
@@ -15,20 +34,26 @@ M.check = function()
     vim.health.error("NeoVim 0.10+ required", { "Upgrade NeoVim to 0.10 or later" })
   end
 
-  -- 2. vtsls detection
-  local get_clients = vim.lsp.get_clients or vim.lsp.get_active_clients
-  local clients = get_clients({ name = "vtsls" })
+  -- 2. server detection
+  local client, name = require("ts_expand_hover.lsp").find_client()
+  if not client then
+    vim.health.warn(
+      "no supported TypeScript server is attached (vtsls, tsc or tsgo)",
+      { "Open a TypeScript file and make sure vtsls or the TypeScript 7 server (tsc) is configured" }
+    )
+    return
+  end
+  vim.health.ok(name .. " is attached")
+  local server_info = client.server_info or {}
 
-  if #clients == 0 then
-    vim.health.warn("vtsls is not attached to any buffer", { "Open a TypeScript file and ensure vtsls is configured" })
+  if name ~= "vtsls" then
+    -- The TypeScript 7 server reports the TypeScript version as its own.
+    vim.health.info("TypeScript version: " .. (server_info.version or "unknown"))
+    check_verbosity_capability(client)
     return
   end
 
-  local client = clients[1]
-  local server_info = client.server_info or {}
-  local vtsls_version = server_info.version or "unknown"
-  vim.health.info("vtsls version: " .. vtsls_version)
-  vim.health.ok("vtsls is attached")
+  vim.health.info("vtsls version: " .. (server_info.version or "unknown"))
 
   -- 3. TypeScript version — defensive parse from server_info.version
   local ts_version = "unknown"

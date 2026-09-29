@@ -26,6 +26,27 @@ local function make_capturing_client(capture_table)
   }
 end
 
+-- Build a fake TypeScript 7 client that captures params and answers with the
+-- given hover result.
+local function make_tsc_client(capture_table, result)
+  return {
+    offset_encoding = "utf-16",
+    request = function(self, method, params, callback, bufnr)
+      capture_table.method = method
+      capture_table.params = params
+      callback(nil, result, nil)
+    end,
+  }
+end
+
+-- Stub client discovery so only the named server is attached.
+local function attach_only(name, client)
+  return stub(vim.lsp, "get_clients").invokes(function(filter)
+    if filter.name == name then return { client } end
+    return {}
+  end)
+end
+
 describe("lsp.request", function()
   local original_schedule
   local buf_hover_stub
@@ -429,4 +450,138 @@ describe("lsp.request", function()
 
   end) -- vtsls quickinfo rendering
 
+  -- ------------------------------------------------------------------ TypeScript 7 server (tsc)
+
+  describe("TypeScript 7 server (tsc)", function()
+    local bufnr
+
+    local TSC_RESULT = {
+      contents = { kind = "markdown", value = "```typescript\nconst x: Outer\n```\nDoc for x.\n" },
+      canIncreaseVerbosity = true,
+    }
+
+    before_each(function()
+      -- A real scratch buffer, because the position conversion reads the line.
+      bufnr = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "ü = x" })
+    end)
+
+    after_each(function()
+      vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+
+    local function request(lsp, opts)
+      local received = nil
+      lsp.request({
+        bufnr     = bufnr,
+        row       = opts.row or 0,
+        col       = opts.col or 0,
+        verbosity = opts.verbosity or 0,
+        state     = opts.state or { requesting = false },
+        callback  = function(hover) received = hover end,
+      })
+      return received
+    end
+
+    it("sends textDocument/hover with verbosityLevel and the position in the client's encoding", function()
+      local captured = {}
+      get_clients_stub = attach_only("tsc", make_tsc_client(captured, TSC_RESULT))
+      local lsp = fresh_lsp()
+
+      -- "ü" is two bytes, so byte column 5 is utf-16 character 4.
+      request(lsp, { row = 0, col = 5, verbosity = 2 })
+
+      assert.equals("textDocument/hover", captured.method)
+      assert.equals(2, captured.params.verbosityLevel)
+      assert.same({ line = 0, character = 4 }, captured.params.position)
+      assert.equals("file:///fake/test.ts", captured.params.textDocument.uri)
+    end)
+
+    it("turns the markdown answer into lines and can_expand", function()
+      get_clients_stub = attach_only("tsc", make_tsc_client({}, TSC_RESULT))
+      local lsp = fresh_lsp()
+
+      local received = request(lsp, {})
+
+      assert.same({ "```typescript", "const x: Outer", "```", "Doc for x." }, received.lines)
+      assert.is_true(received.can_expand)
+    end)
+
+    it("reports can_expand false when the server leaves canIncreaseVerbosity out", function()
+      local result = { contents = { kind = "markdown", value = "```typescript\nconst x: Outer\n```" } }
+      get_clients_stub = attach_only("tsc", make_tsc_client({}, result))
+      local lsp = fresh_lsp()
+
+      local received = request(lsp, {})
+
+      assert.is_false(received.can_expand)
+    end)
+
+    it("clears state.requesting after the answer", function()
+      get_clients_stub = attach_only("tsc", make_tsc_client({}, TSC_RESULT))
+      local lsp = fresh_lsp()
+
+      local state = { requesting = false }
+      request(lsp, { state = state })
+
+      assert.is_false(state.requesting)
+    end)
+
+    it("falls back to vim.lsp.buf.hover() when the server answers with an error", function()
+      local client = {
+        offset_encoding = "utf-16",
+        request = function(self, method, params, callback, bufnr)
+          callback({ code = -32603 }, nil, nil)
+        end,
+      }
+      get_clients_stub = attach_only("tsc", client)
+      local lsp = fresh_lsp()
+
+      local state = { requesting = false }
+      local received = request(lsp, { state = state })
+
+      assert.is_nil(received)
+      assert.stub(buf_hover_stub).was.called()
+      assert.is_false(state.requesting)
+    end)
+
+    it("falls back to vim.lsp.buf.hover() when the server answers with null", function()
+      get_clients_stub = attach_only("tsc", make_tsc_client({}, nil))
+      local lsp = fresh_lsp()
+
+      local received = request(lsp, {})
+
+      assert.is_nil(received)
+      assert.stub(buf_hover_stub).was.called()
+    end)
+
+    it("accepts the older tsgo client name", function()
+      local captured = {}
+      get_clients_stub = attach_only("tsgo", make_tsc_client(captured, TSC_RESULT))
+      local lsp = fresh_lsp()
+
+      request(lsp, {})
+
+      assert.equals("textDocument/hover", captured.method)
+    end)
+
+    it("prefers vtsls when both servers are attached", function()
+      local vtsls_captured = {}
+      local tsc_captured   = {}
+      local vtsls_client   = make_capturing_client(vtsls_captured)
+      local tsc_client     = make_tsc_client(tsc_captured, TSC_RESULT)
+      get_clients_stub = stub(vim.lsp, "get_clients").invokes(function(filter)
+        if filter.name == "vtsls" then return { vtsls_client } end
+        if filter.name == "tsc"   then return { tsc_client } end
+        return {}
+      end)
+      local lsp = fresh_lsp()
+
+      request(lsp, {})
+
+      assert.equals("workspace/executeCommand", vtsls_captured.method)
+      assert.is_nil(tsc_captured.method)
+    end)
+
+  end) -- TypeScript 7 server (tsc)
 end)

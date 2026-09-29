@@ -7,34 +7,61 @@ CONTENTS                                        *ts_expand_hover-contents*
 
   1. Introduction ............... |ts_expand_hover-intro|
   2. Requirements ............... |ts_expand_hover-requirements|
-  3. Setup ...................... |ts_expand_hover-setup|
-  4. Configuration .............. |ts_expand_hover-config|
-  5. Keymaps .................... |ts_expand_hover-keymaps|
-  6. Health check ............... |ts_expand_hover-health|
+  3. TypeScript 7 setup ......... |ts_expand_hover-typescript7|
+  4. Setup ...................... |ts_expand_hover-setup|
+  5. Configuration .............. |ts_expand_hover-config|
+  6. Keymaps .................... |ts_expand_hover-keymaps|
+  7. Health check ............... |ts_expand_hover-health|
 
 ==============================================================================
 INTRODUCTION                                    *ts_expand_hover-intro*
 
-ts-expand-hover.nvim brings TypeScript 5.9+ expandable type inspection to
+ts-expand-hover.nvim brings TypeScript's expandable type inspection to
 NeoVim. When you press `K` over a TypeScript symbol, the plugin opens a
 focused float showing the type signature. Inside the float you can press `+`
 to expand the type to the next verbosity level and `-` to collapse it back,
-replicating the type inspection experience available natively in VS Code with
-TypeScript 5.9+.
+replicating the type inspection experience available natively in VS Code.
 
-The plugin sends incremental `typescript.tsserver.request` calls with
-increasing `verbosityLevel` values (0–3) to the vtsls language server, which
-forwards them to tsserver via an escape hatch. For this reason the plugin is
-vtsls-only in version 1. Support for ts_ls (the official NeoVim TypeScript
-server) is deferred to a future version.
+The plugin talks to one of two servers:
+
+- vtsls: the plugin sends `typescript.tsserverRequest` calls with increasing
+  `verbosityLevel` values through `workspace/executeCommand`, and vtsls
+  forwards them to tsserver's `quickinfo` command (TypeScript 5.9+).
+- The TypeScript 7 server (`tsc --lsp`, also known as tsgo): the plugin sends
+  a plain `textDocument/hover` request with `verbosityLevel` on it. This
+  server needs one client capability, see |ts_expand_hover-typescript7|.
+
+When both are attached to a buffer, vtsls is used.
 
 ==============================================================================
 REQUIREMENTS                                    *ts_expand_hover-requirements*
 
 - NeoVim 0.10 or later
-- vtsls LSP server configured and attached to TypeScript buffers
-  (https://github.com/yioneko/vtsls)
-- TypeScript 5.9 or later (for `verbosityLevel` quickinfo support)
+- One TypeScript language server attached to TypeScript buffers:
+  - vtsls (https://github.com/yioneko/vtsls) with TypeScript 5.9 or later
+    (for `verbosityLevel` quickinfo support), or
+  - TypeScript 7 (`tsc --lsp`), the server nvim-lspconfig calls `tsc`
+    (older versions call it `tsgo`)
+
+==============================================================================
+TYPESCRIPT 7 SETUP                              *ts_expand_hover-typescript7*
+
+The TypeScript 7 server tells the plugin whether a type can expand further
+only when the client declared the `experimental.hoverVerbosityLevel`
+capability. Without it the float opens but `+` does nothing. Add the
+capability to the `tsc` LSP config (NeoVim 0.11+ shown): >lua
+  vim.lsp.config("tsc", {
+    capabilities = { experimental = { hoverVerbosityLevel = true } },
+    -- Optional. The server cuts long types at 500 characters and shows
+    -- "... N more ..." in their place. Raise the cap to see big types whole.
+    settings = { ["js/ts"] = { maximumHoverLength = 5000 } },
+  })
+  vim.lsp.enable("tsc")
+<
+
+TypeScript flags this capability as experimental, so treat TypeScript 7
+support as experimental too. |ts_expand_hover-health| reports whether the
+capability is declared.
 
 ==============================================================================
 SETUP                                           *ts_expand_hover-setup*
@@ -157,13 +184,15 @@ Run the built-in health check: >vim
 The health check reports:
 
 - NeoVim version (requires 0.10+)
-- Whether vtsls is attached to the current buffer
-- vtsls server version (from LSP `InitializeResult.serverInfo`)
-- TypeScript version (parsed from vtsls server info when available)
+- Which supported server is attached (vtsls, tsc or tsgo)
+- TypeScript version (from LSP `InitializeResult.serverInfo`; parsed out of
+  the vtsls version string when available)
+- For the TypeScript 7 server, whether the `experimental.hoverVerbosityLevel`
+  capability is declared (an error when it is not)
 
-Open a TypeScript file before running the check so vtsls has a chance to
-attach. If vtsls is not attached the check will warn and skip the version
-reports.
+Open a TypeScript file before running the check so the server has a chance
+to attach. If no supported server is attached the check will warn and skip
+the version reports.
 
 ==============================================================================
 vim:tw=78:ts=8:noet:ft=help:norl:

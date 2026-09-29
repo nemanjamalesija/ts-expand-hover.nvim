@@ -98,8 +98,9 @@ local function _do_collapse()
 end
 
 --- Trigger expandable hover at the current cursor position.
---- Sends a quickinfo request to vtsls; falls back to vim.lsp.buf.hover() when
---- vtsls is not attached or returns an error (COMP-01, COMP-02).
+--- Asks the attached TypeScript server (vtsls or tsc) for the hover; falls back
+--- to vim.lsp.buf.hover() when none is attached or the server cannot answer
+--- (COMP-01, COMP-02).
 function M.hover()
   local bufnr = vim.api.nvim_get_current_buf()
   -- Capture source context synchronously before the async callback fires.
