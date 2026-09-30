@@ -41,6 +41,8 @@ For other plugin managers, call `require("ts_expand_hover").setup()` after loadi
 The TypeScript 7 server tells the plugin whether a type can expand further only when the client declared the `experimental.hoverVerbosityLevel` capability. Without it, the float opens but `+` does nothing. Add the capability to your `tsc` LSP config (NeoVim 0.11+ shown):
 
 ```lua
+-- On older nvim-lspconfig the server is called "tsgo".
+-- Use that name here and in vim.lsp.enable().
 vim.lsp.config("tsc", {
   capabilities = { experimental = { hoverVerbosityLevel = true } },
   -- Optional. The server cuts long types at 500 characters and shows
